@@ -24,6 +24,7 @@ type FileService interface {
 	ValidatePassword(ctx context.Context, slug, password string) (bool, error)
 	ListPublicRecent(ctx context.Context, limit int) ([]*paste.FileSummary, error)
 	PresignDownloadURL(ctx context.Context, slug string, inline bool) (string, error)
+	IncrementDownloads(ctx context.Context, slug string) error
 }
 
 // FileHandler handles HTTP requests for file upload and retrieval.
@@ -278,6 +279,7 @@ func (h *FileHandler) GetFile(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", record.MIMEType)
 		w.Header().Set("Content-Disposition", fmt.Sprintf(`%s; filename="%s"`, disposition, record.Filename))
 		w.Header().Set("Content-Length", strconv.FormatInt(record.SizeBytes, 10))
+		w.Header().Set("X-Downloads-Count", strconv.Itoa(record.Downloads))
 		w.WriteHeader(http.StatusOK)
 		return
 	}
@@ -335,6 +337,9 @@ func (h *FileHandler) DirectDownload(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+
+	// Increment downloads!
+	_ = h.fileService.IncrementDownloads(r.Context(), slug)
 
 	// Redirect browser directly to the presigned S3 URL.
 	http.Redirect(w, r, presignedURL, http.StatusTemporaryRedirect)

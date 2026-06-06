@@ -222,15 +222,18 @@ function TokenGate() {
 // Dashboard
 // ---------------------------------------------------------------------------
 
-type Tab = 'pastes' | 'files' | 'reports' | 'settings';
+type Tab = 'overview' | 'pastes' | 'files' | 'reports' | 'settings';
 
 function Dashboard({ token, onLogout }: { token: string; onLogout: () => void }) {
   const [stats, setStats] = useState<AdminStats | null>(null);
   const [pastes, setPastes] = useState<AdminPasteItem[]>([]);
   const [files, setFiles] = useState<AdminFileItem[]>([]);
   const [reports, setReports] = useState<AdminReport[]>([]);
-  const [tab, setTab] = useState<Tab>('pastes');
+  const [tab, setTab] = useState<Tab>('overview');
   const [loading, setLoading] = useState(true);
+  const [loadingPastes, setLoadingPastes] = useState(false);
+  const [loadingFiles, setLoadingFiles] = useState(false);
+  const [loadingReports, setLoadingReports] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busySlug, setBusySlug] = useState<string | null>(null);
   const [busyReportId, setBusyReportId] = useState<string | null>(null);
@@ -244,25 +247,18 @@ function Dashboard({ token, onLogout }: { token: string; onLogout: () => void })
     setReloadKey((k) => k + 1);
   }, []);
 
-  // Fetch all admin data whenever the token changes or a reload is requested.
-  // State is only updated asynchronously (after the awaited fetch) so this stays
-  // a pure synchronization effect.
+  const topPastes = stats?.top_pastes || [];
+  const topFiles = stats?.top_files || [];
+
+  // 1. Fetch Stats on mount / reload (always needed for overview & badges)
   useEffect(() => {
     let cancelled = false;
 
     (async () => {
       try {
-        const [statsRes, pastesRes, filesRes, reportsRes] = await Promise.all([
-          getAdminStats(token),
-          getAdminPastes(token),
-          getAdminFiles(token),
-          getAdminReports(token),
-        ]);
+        const statsRes = await getAdminStats(token);
         if (cancelled) return;
         setStats(statsRes);
-        setPastes(pastesRes.pastes ?? []);
-        setFiles(filesRes.files ?? []);
-        setReports(reportsRes.reports ?? []);
         setError(null);
       } catch (err) {
         if (cancelled) return;
@@ -274,7 +270,7 @@ function Dashboard({ token, onLogout }: { token: string; onLogout: () => void })
           onLogout();
           return;
         }
-        setError('Gagal memuat data admin.');
+        setError('Gagal memuat statistik admin.');
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -284,6 +280,102 @@ function Dashboard({ token, onLogout }: { token: string; onLogout: () => void })
       cancelled = true;
     };
   }, [token, onLogout, reloadKey]);
+
+  // 2. Fetch Pastes lazily when on pastes tab
+  useEffect(() => {
+    if (tab !== 'pastes') return;
+    let cancelled = false;
+
+    (async () => {
+      try {
+        setLoadingPastes(true);
+        const pastesRes = await getAdminPastes(token);
+        if (cancelled) return;
+        setPastes(pastesRes.pastes ?? []);
+        setError(null);
+      } catch (err) {
+        if (cancelled) return;
+        if (
+          err instanceof APIError &&
+          (err.status === 401 || err.status === 404)
+        ) {
+          onLogout();
+          return;
+        }
+        setError('Gagal memuat daftar paste.');
+      } finally {
+        if (!cancelled) setLoadingPastes(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [token, onLogout, tab, reloadKey]);
+
+  // 3. Fetch Files lazily when on files tab
+  useEffect(() => {
+    if (tab !== 'files') return;
+    let cancelled = false;
+
+    (async () => {
+      try {
+        setLoadingFiles(true);
+        const filesRes = await getAdminFiles(token);
+        if (cancelled) return;
+        setFiles(filesRes.files ?? []);
+        setError(null);
+      } catch (err) {
+        if (cancelled) return;
+        if (
+          err instanceof APIError &&
+          (err.status === 401 || err.status === 404)
+        ) {
+          onLogout();
+          return;
+        }
+        setError('Gagal memuat daftar file.');
+      } finally {
+        if (!cancelled) setLoadingFiles(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [token, onLogout, tab, reloadKey]);
+
+  // 4. Fetch Reports lazily when on reports tab
+  useEffect(() => {
+    if (tab !== 'reports') return;
+    let cancelled = false;
+
+    (async () => {
+      try {
+        setLoadingReports(true);
+        const reportsRes = await getAdminReports(token);
+        if (cancelled) return;
+        setReports(reportsRes.reports ?? []);
+        setError(null);
+      } catch (err) {
+        if (cancelled) return;
+        if (
+          err instanceof APIError &&
+          (err.status === 401 || err.status === 404)
+        ) {
+          onLogout();
+          return;
+        }
+        setError('Gagal memuat daftar laporan.');
+      } finally {
+        if (!cancelled) setLoadingReports(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [token, onLogout, tab, reloadKey]);
 
   const handleDeletePaste = async (slug: string) => {
     if (!window.confirm(`Hapus paste "${slug}"? Tindakan ini tidak dapat dibatalkan.`)) {
@@ -459,117 +551,6 @@ function Dashboard({ token, onLogout }: { token: string; onLogout: () => void })
         </div>
       </div>
 
-      {/* Stats */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 sm:max-w-4xl">
-        <div className="rounded-xl border border-gray-200 dark:border-dark-700 bg-white dark:bg-dark-800 p-4 shadow-sm">
-          <p className="text-sm text-gray-500 dark:text-gray-400">Total Paste</p>
-          <p className="mt-1 text-2xl font-bold text-gray-900 dark:text-gray-100">
-            {stats ? stats.total_pastes : '—'}
-          </p>
-        </div>
-        <div className="rounded-xl border border-gray-200 dark:border-dark-700 bg-white dark:bg-dark-800 p-4 shadow-sm">
-          <p className="text-sm text-gray-500 dark:text-gray-400">Total File</p>
-          <p className="mt-1 text-2xl font-bold text-gray-900 dark:text-gray-100">
-            {stats ? stats.total_files : '—'}
-          </p>
-        </div>
-        <div className="rounded-xl border border-gray-200 dark:border-dark-700 bg-white dark:bg-dark-800 p-4 shadow-sm">
-          <p className="text-sm text-gray-500 dark:text-gray-400">Ukuran Penyimpanan</p>
-          <p className="mt-1 text-2xl font-bold text-gray-900 dark:text-gray-100">
-            {stats && stats.total_bytes !== undefined ? formatFileSize(stats.total_bytes) : '—'}
-          </p>
-        </div>
-        <div className="rounded-xl border border-gray-200 dark:border-dark-700 bg-white dark:bg-dark-800 p-4 shadow-sm">
-          <p className="text-sm text-gray-500 dark:text-gray-400">Laporan Tertunda</p>
-          <p
-            className={`mt-1 text-2xl font-bold ${
-              stats && stats.pending_reports > 0
-                ? 'text-red-600 dark:text-red-400'
-                : 'text-gray-900 dark:text-gray-100'
-            }`}
-          >
-            {stats ? stats.pending_reports : '—'}
-          </p>
-        </div>
-      </div>
-
-      {/* S3 Storage Sharding Statistics */}
-      {stats && stats.provider_stats && stats.provider_stats.length > 0 && (
-        <div className="rounded-xl border border-gray-200 dark:border-dark-700 bg-white dark:bg-dark-800/80 p-5 shadow-lg backdrop-blur-sm">
-          <h2 className="text-sm font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-4 flex items-center gap-2">
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4 text-accent">
-              <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
-            </svg>
-            Status Distribusi Sharding S3 Cloud
-          </h2>
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {stats.provider_stats.map((p) => {
-              const totalBytes = stats.total_bytes || 1;
-              const percentage = Math.min(100, Math.round((p.size_bytes / totalBytes) * 100));
-              
-              // Dynamic brand coloring for popular cloud providers!
-              const isB2 = p.provider_name.includes("B2") || p.provider_name.includes("BLACKBLAZE") || p.provider_name.includes("BACKBLAZE");
-              const isFilebase = p.provider_name.includes("FILEBASE");
-              const isR2 = p.provider_name.includes("R2") || p.provider_name.includes("CLOUDFLARE");
-              
-              let brandColorCls = "bg-accent shadow-accent/20";
-              let textBrandCls = "text-accent";
-              let bgTagCls = "bg-accent/10 text-accent";
-              
-              if (isB2) {
-                brandColorCls = "bg-red-500 shadow-red-500/20";
-                textBrandCls = "text-red-500 dark:text-red-400";
-                bgTagCls = "bg-red-500/10 text-red-600 dark:text-red-300";
-              } else if (isFilebase) {
-                brandColorCls = "bg-blue-500 shadow-blue-500/20";
-                textBrandCls = "text-blue-500 dark:text-blue-400";
-                bgTagCls = "bg-blue-500/10 text-blue-600 dark:text-blue-300";
-              } else if (isR2) {
-                brandColorCls = "bg-orange-500 shadow-orange-500/20";
-                textBrandCls = "text-orange-500 dark:text-orange-400";
-                bgTagCls = "bg-orange-500/10 text-orange-600 dark:text-orange-300";
-              }
-
-              return (
-                <div key={p.provider_name} className="flex flex-col justify-between rounded-xl border border-gray-150 dark:border-dark-700 bg-gray-50/50 dark:bg-dark-900/40 p-4 transition-all hover:scale-[1.01] hover:border-gray-200 dark:hover:border-dark-600 shadow-sm">
-                  <div>
-                    <div className="flex items-center justify-between gap-2 mb-3">
-                      <span className="font-mono font-bold text-sm text-gray-900 dark:text-gray-100 flex items-center gap-1.5">
-                        <span className={`inline-block h-2.5 w-2.5 rounded-full ${brandColorCls}`} />
-                        {p.provider_name}
-                      </span>
-                      <span className={`rounded-full px-2 py-0.5 text-xs font-semibold tracking-wide uppercase ${bgTagCls}`}>
-                        {percentage}%
-                      </span>
-                    </div>
-                    <div className="space-y-1.5">
-                      <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400">
-                        <span>Penyimpanan Terpakai</span>
-                        <span className="font-medium text-gray-800 dark:text-gray-200">{formatFileSize(p.size_bytes)}</span>
-                      </div>
-                      <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400">
-                        <span>Berkas Tersimpan</span>
-                        <span className="font-medium text-gray-800 dark:text-gray-200">{p.files_count} file</span>
-                      </div>
-                    </div>
-                  </div>
-                  
-                  {/* Progress bar */}
-                  <div className="mt-4">
-                    <div className="h-1.5 w-full rounded-full bg-gray-200 dark:bg-dark-800 overflow-hidden">
-                      <div 
-                        className={`h-full rounded-full transition-all duration-500 ${brandColorCls}`}
-                        style={{ width: `${percentage}%` }}
-                      />
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
       {notice && (
         <div
           role="status"
@@ -592,6 +573,17 @@ function Dashboard({ token, onLogout }: { token: string; onLogout: () => void })
       <div className="flex gap-2 border-b border-gray-200 dark:border-dark-700 overflow-x-auto scrollbar-none whitespace-nowrap -mx-4 px-4 sm:mx-0 sm:px-0">
         <button
           type="button"
+          onClick={() => setTab('overview')}
+          className={`shrink-0 min-h-[44px] px-4 py-2 text-sm font-medium transition-colors ${
+            tab === 'overview'
+              ? 'border-b-2 border-accent text-gray-900 dark:text-white'
+              : 'text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200'
+          }`}
+        >
+          Ringkasan
+        </button>
+        <button
+          type="button"
           onClick={() => setTab('pastes')}
           className={`shrink-0 min-h-[44px] px-4 py-2 text-sm font-medium transition-colors ${
             tab === 'pastes'
@@ -599,7 +591,7 @@ function Dashboard({ token, onLogout }: { token: string; onLogout: () => void })
               : 'text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200'
           }`}
         >
-          Paste ({pastes.length})
+          Paste ({stats ? stats.total_pastes : 0})
         </button>
         <button
           type="button"
@@ -610,7 +602,7 @@ function Dashboard({ token, onLogout }: { token: string; onLogout: () => void })
               : 'text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200'
           }`}
         >
-          File ({files.length})
+          File ({stats ? stats.total_files : 0})
         </button>
         <button
           type="button"
@@ -621,7 +613,7 @@ function Dashboard({ token, onLogout }: { token: string; onLogout: () => void })
               : 'text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200'
           }`}
         >
-          Laporan ({reports.length})
+          Laporan ({stats ? stats.pending_reports : 0})
           {stats && stats.pending_reports > 0 && (
             <span className="ml-1.5 inline-flex items-center justify-center rounded-full bg-red-600 px-1.5 py-0.5 text-[10px] font-bold leading-none text-white">
               {stats.pending_reports}
@@ -645,22 +637,235 @@ function Dashboard({ token, onLogout }: { token: string; onLogout: () => void })
         <AdminSettingsForm token={token} onUnauthorized={onLogout} />
       ) : loading ? (
         <p className="py-8 text-center text-gray-500 dark:text-gray-400">Memuat...</p>
+      ) : tab === 'overview' ? (
+        <div className="space-y-6">
+          {/* Stats */}
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 sm:max-w-4xl">
+            <div className="rounded-xl border border-gray-200 dark:border-dark-700 bg-white dark:bg-dark-800 p-4 shadow-sm">
+              <p className="text-sm text-gray-500 dark:text-gray-400">Total Paste</p>
+              <p className="mt-1 text-2xl font-bold text-gray-900 dark:text-gray-100">
+                {stats ? stats.total_pastes : '—'}
+              </p>
+            </div>
+            <div className="rounded-xl border border-gray-200 dark:border-dark-700 bg-white dark:bg-dark-800 p-4 shadow-sm">
+              <p className="text-sm text-gray-500 dark:text-gray-400">Total File</p>
+              <p className="mt-1 text-2xl font-bold text-gray-900 dark:text-gray-100">
+                {stats ? stats.total_files : '—'}
+              </p>
+            </div>
+            <div className="rounded-xl border border-gray-200 dark:border-dark-700 bg-white dark:bg-dark-800 p-4 shadow-sm">
+              <p className="text-sm text-gray-500 dark:text-gray-400">Ukuran Penyimpanan</p>
+              <p className="mt-1 text-2xl font-bold text-gray-900 dark:text-gray-100">
+                {stats && stats.total_bytes !== undefined ? formatFileSize(stats.total_bytes) : '—'}
+              </p>
+            </div>
+            <div className="rounded-xl border border-gray-200 dark:border-dark-700 bg-white dark:bg-dark-800 p-4 shadow-sm">
+              <p className="text-sm text-gray-500 dark:text-gray-400">Laporan Tertunda</p>
+              <p
+                className={`mt-1 text-2xl font-bold ${
+                  stats && stats.pending_reports > 0
+                    ? 'text-red-600 dark:text-red-400'
+                    : 'text-gray-900 dark:text-gray-100'
+                }`}
+              >
+                {stats ? stats.pending_reports : '—'}
+              </p>
+            </div>
+          </div>
+
+          {/* S3 Storage Sharding Statistics */}
+          {stats && stats.provider_stats && stats.provider_stats.length > 0 && (
+            <div className="rounded-xl border border-gray-200 dark:border-dark-700 bg-white dark:bg-dark-800/80 p-5 shadow-lg backdrop-blur-sm">
+              <h2 className="text-sm font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-4 flex items-center gap-2">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4 text-accent">
+                  <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
+                </svg>
+                Status Distribusi Sharding S3 Cloud
+              </h2>
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                {stats.provider_stats.map((p) => {
+                  const totalBytes = stats.total_bytes || 1;
+                  const percentage = Math.min(100, Math.round((p.size_bytes / totalBytes) * 100));
+                  
+                  // Dynamic brand coloring for popular cloud providers!
+                  const isB2 = p.provider_name.includes("B2") || p.provider_name.includes("BLACKBLAZE") || p.provider_name.includes("BACKBLAZE");
+                  const isFilebase = p.provider_name.includes("FILEBASE");
+                  const isR2 = p.provider_name.includes("R2") || p.provider_name.includes("CLOUDFLARE");
+                  
+                  let brandColorCls = "bg-accent shadow-accent/20";
+                  let bgTagCls = "bg-accent/10 text-accent";
+                  
+                  if (isB2) {
+                    brandColorCls = "bg-red-500 shadow-red-500/20";
+                    bgTagCls = "bg-red-500/10 text-red-600 dark:text-red-300";
+                  } else if (isFilebase) {
+                    brandColorCls = "bg-blue-500 shadow-blue-500/20";
+                    bgTagCls = "bg-blue-500/10 text-blue-600 dark:text-blue-300";
+                  } else if (isR2) {
+                    brandColorCls = "bg-orange-500 shadow-orange-500/20";
+                    bgTagCls = "bg-orange-500/10 text-orange-600 dark:text-orange-300";
+                  }
+
+                  return (
+                    <div key={p.provider_name} className="flex flex-col justify-between rounded-xl border border-gray-150 dark:border-dark-700 bg-gray-50/50 dark:bg-dark-900/40 p-4 transition-all hover:scale-[1.01] hover:border-gray-200 dark:hover:border-dark-600 shadow-sm">
+                      <div>
+                        <div className="flex items-center justify-between gap-2 mb-3">
+                          <span className="font-mono font-bold text-sm text-gray-900 dark:text-gray-100 flex items-center gap-1.5">
+                            <span className={`inline-block h-2.5 w-2.5 rounded-full ${brandColorCls}`} />
+                            {p.provider_name}
+                          </span>
+                          <span className={`rounded-full px-2 py-0.5 text-xs font-semibold tracking-wide uppercase ${bgTagCls}`}>
+                            {percentage}%
+                          </span>
+                        </div>
+                        <div className="space-y-1.5">
+                          <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400">
+                            <span>Penyimpanan Terpakai</span>
+                            <span className="font-medium text-gray-800 dark:text-gray-200">{formatFileSize(p.size_bytes)}</span>
+                          </div>
+                          <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400">
+                            <span>Berkas Tersimpan</span>
+                            <span className="font-medium text-gray-800 dark:text-gray-200">{p.files_count} file</span>
+                          </div>
+                        </div>
+                      </div>
+                      
+                      {/* Progress bar */}
+                      <div className="mt-4">
+                        <div className="h-1.5 w-full rounded-full bg-gray-200 dark:bg-dark-800 overflow-hidden">
+                          <div 
+                            className={`h-full rounded-full transition-all duration-500 ${brandColorCls}`}
+                            style={{ width: `${percentage}%` }}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Top Performing Content Panel */}
+          <div className="grid gap-6 md:grid-cols-2">
+            {/* Top Pastes Card */}
+            <div className="rounded-xl border border-gray-200 dark:border-dark-700 bg-white dark:bg-dark-800 p-5 shadow-lg">
+              <h2 className="text-sm font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-4 flex items-center gap-2">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4 text-accent">
+                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                  <circle cx="12" cy="12" r="3" />
+                </svg>
+                Top 5 Paste Terpopuler (Views)
+              </h2>
+              {topPastes.length === 0 ? (
+                <p className="text-sm text-gray-500 dark:text-gray-400 py-4 text-center">Belum ada data</p>
+              ) : (
+                <div className="divide-y divide-gray-100 dark:divide-dark-700/60">
+                  {topPastes.map((p, idx) => (
+                    <div key={p.slug} className="flex items-center justify-between py-3 gap-3">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-bold text-gray-400 dark:text-gray-500 font-mono w-4">
+                            #{idx + 1}
+                          </span>
+                          <a
+                            href={`/${p.slug}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="truncate text-sm font-medium text-gray-900 dark:text-gray-100 hover:text-accent-hover"
+                          >
+                            {p.title.trim() || 'Untitled'}
+                          </a>
+                        </div>
+                        <div className="mt-1 flex items-center gap-2 text-xs text-gray-500 dark:text-gray-500 pl-6">
+                          <code>{p.slug}</code>
+                          <span>•</span>
+                          <span>{p.language}</span>
+                        </div>
+                      </div>
+                      <span className="shrink-0 inline-flex items-center gap-1 rounded-full bg-accent/10 px-2.5 py-0.5 text-xs font-semibold text-accent dark:text-accent-hover">
+                        {p.views || 0} views
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Top Files Card */}
+            <div className="rounded-xl border border-gray-200 dark:border-dark-700 bg-white dark:bg-dark-800 p-5 shadow-lg">
+              <h2 className="text-sm font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-4 flex items-center gap-2">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4 text-accent">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                  <polyline points="7 10 12 15 17 10" />
+                  <line x1="12" y1="15" x2="12" y2="3" />
+                </svg>
+                Top 5 File Terpopuler (Unduhan)
+              </h2>
+              {topFiles.length === 0 ? (
+                <p className="text-sm text-gray-500 dark:text-gray-400 py-4 text-center">Belum ada data</p>
+              ) : (
+                <div className="divide-y divide-gray-100 dark:divide-dark-700/60">
+                  {topFiles.map((f, idx) => (
+                    <div key={f.slug} className="flex items-center justify-between py-3 gap-3">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-bold text-gray-400 dark:text-gray-500 font-mono w-4">
+                            #{idx + 1}
+                          </span>
+                          <a
+                            href={`/f/${f.slug}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="truncate text-sm font-medium text-gray-900 dark:text-gray-100 hover:text-accent-hover"
+                          >
+                            {f.filename}
+                          </a>
+                        </div>
+                        <div className="mt-1 flex items-center gap-2 text-xs text-gray-500 dark:text-gray-500 pl-6">
+                          <code>{f.slug}</code>
+                          <span>•</span>
+                          <span>{formatFileSize(f.size_bytes)}</span>
+                        </div>
+                      </div>
+                      <span className="shrink-0 inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2.5 py-0.5 text-xs font-semibold text-emerald-600 dark:text-emerald-300">
+                        {f.downloads || 0} unduhan
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
       ) : tab === 'pastes' ? (
-        <PasteTable
-          pastes={pastes}
-          busySlug={busySlug}
-          onDelete={handleDeletePaste}
-        />
+        loadingPastes ? (
+          <p className="py-8 text-center text-gray-500 dark:text-gray-400">Memuat daftar paste...</p>
+        ) : (
+          <PasteTable
+            pastes={pastes}
+            busySlug={busySlug}
+            onDelete={handleDeletePaste}
+          />
+        )
       ) : tab === 'files' ? (
-        <FileTable files={files} busySlug={busySlug} onDelete={handleDeleteFile} />
+        loadingFiles ? (
+          <p className="py-8 text-center text-gray-500 dark:text-gray-400">Memuat daftar file...</p>
+        ) : (
+          <FileTable files={files} busySlug={busySlug} onDelete={handleDeleteFile} />
+        )
       ) : (
-        <ReportsTable
-          reports={reports}
-          busyId={busyReportId}
-          onStatus={handleReportStatus}
-          onDeleteContent={handleDeleteReportedContent}
-          onDelete={handleDeleteReport}
-        />
+        loadingReports ? (
+          <p className="py-8 text-center text-gray-500 dark:text-gray-400">Memuat daftar laporan...</p>
+        ) : (
+          <ReportsTable
+            reports={reports}
+            busyId={busyReportId}
+            onStatus={handleReportStatus}
+            onDeleteContent={handleDeleteReportedContent}
+            onDelete={handleDeleteReport}
+          />
+        )
       )}
     </div>
   );
@@ -715,6 +920,7 @@ function PasteTable({
                 </span>
                 <VisibilityBadge visibility={p.visibility} />
                 <span>{formatRelativeTime(p.created_at)}</span>
+                <span>• Dilihat {p.views ?? 0} kali</span>
               </div>
             </div>
             <button
@@ -779,6 +985,7 @@ function FileTable({
                 <span>{formatFileSize(f.size_bytes)}</span>
                 <VisibilityBadge visibility={f.visibility} />
                 <span>{formatRelativeTime(f.created_at)}</span>
+                <span>• Diunduh {f.downloads ?? 0} kali</span>
               </div>
             </div>
             <button

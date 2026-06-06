@@ -263,6 +263,10 @@ func (h *PasteHandler) HandleView(w http.ResponseWriter, r *http.Request) {
 		highlighted = p.Content
 	}
 
+	// Increment views!
+	_ = h.pasteService.IncrementViews(r.Context(), slug)
+	p.Views++
+
 	// Calculate remaining time until expiry.
 	var remainingSeconds *int64
 	if p.ExpiresAt != nil {
@@ -281,6 +285,7 @@ func (h *PasteHandler) HandleView(w http.ResponseWriter, r *http.Request) {
 		"created_at":        p.CreatedAt,
 		"expires_at":        p.ExpiresAt,
 		"remaining_seconds": remainingSeconds,
+		"views":             p.Views,
 	})
 }
 
@@ -332,6 +337,9 @@ func (h *PasteHandler) HandleUnlock(w http.ResponseWriter, r *http.Request) {
 	// Password correct — reset rate limit and return paste content.
 	h.accessController.ResetRateLimit(r.Context(), clientIP, slug)
 
+	// Increment views!
+	_ = h.pasteService.IncrementViews(r.Context(), slug)
+
 	// Fetch the paste to return its content.
 	p, err := h.pasteService.GetBySlug(r.Context(), slug)
 	if err != nil {
@@ -362,6 +370,7 @@ func (h *PasteHandler) HandleUnlock(w http.ResponseWriter, r *http.Request) {
 		"created_at":        p.CreatedAt,
 		"expires_at":        p.ExpiresAt,
 		"remaining_seconds": remainingSeconds,
+		"views":             p.Views,
 	})
 }
 

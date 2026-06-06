@@ -8,7 +8,7 @@
 
 *   **Secure Paste Bin**: Share code snippets and text notes with customizable syntax highlighting powered by Chroma.
 *   **File Sharing**: Upload and download files up to 100 MB with automatic relative unit formatting and responsive visual grids.
-*   **Flexible Storage Options**: Support for AWS S3, Cloudflare R2, MinIO, or fallback to the local filesystem if external S3 storage is not configured.
+*   **Flexible Storage Options**: Support for AWS S3, Cloudflare R2, MinIO, or local filesystem fallback. Supports sharding and distributing uploads across multiple S3-compatible providers simultaneously (Multi-S3).
 *   **Automated Expiry Cleanup**: Integrated background worker that automatically deletes expired pastes and files from both the database and storage.
 *   **Access Control**: Secure sharing with optional password protection for pastes and files, hashed using bcrypt.
 *   **Admin Dashboard**: Manage active pastes, files, abuse reports, and adjust application quotas.
@@ -77,6 +77,19 @@ The application supports configuration via environment variables:
 | `S3_ENDPOINT` | Custom endpoint (useful for MinIO/R2) | *Standard AWS S3* |
 | `S3_ACCESS_KEY` | S3 API Access Key | *Static credential* |
 | `S3_SECRET_KEY` | S3 API Secret Key | *Static credential* |
+
+### Multi-S3 Configurations
+
+To distribute uploads across multiple S3-compatible providers (to combine free tiers or shard data), define `S3_PROVIDERS` with a comma-separated list of provider prefixes and configure the prefix-specific variables:
+
+*   **`S3_PROVIDERS`**: Comma-separated list of provider identifiers (e.g., `FILEBASE,CLOUDFLARE`).
+*   **`S3_<PROVIDER>_BUCKET`**: Bucket name for the provider.
+*   **`S3_<PROVIDER>_REGION`**: Region for the provider (defaults to `us-east-1`).
+*   **`S3_<PROVIDER>_ENDPOINT`**: Custom API endpoint (e.g., `https://s3.filebase.io`).
+*   **`S3_<PROVIDER>_ACCESS_KEY`**: Access key credentials.
+*   **`S3_<PROVIDER>_SECRET_KEY`**: Secret key credentials.
+*   **`S3_<PROVIDER>_CUSTOM_DOMAIN`**: Optional custom download domain or CDN endpoint.
+*   **`S3_<PROVIDER>_IS_PUBLIC`**: Set to `true` if the bucket is public (bypasses presigned URL query parameters).
 
 ---
 

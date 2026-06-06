@@ -54,6 +54,11 @@ func (m *mockPasteService) ListPublicRecent(ctx context.Context, limit int) ([]*
 	return nil, nil
 }
 
+func (m *mockPasteService) IncrementViews(ctx context.Context, slug string) error {
+	return nil
+}
+
+
 type mockHighlighter struct {
 	highlightFn          func(content, language string) (string, error)
 	supportedLanguagesFn func() []highlight.Language

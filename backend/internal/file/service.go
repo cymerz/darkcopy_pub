@@ -46,7 +46,9 @@ type FileRepository interface {
 	InsertFile(ctx context.Context, file *paste.FileRecord) error
 	GetBySlug(ctx context.Context, slug string) (*paste.FileRecord, error)
 	ListPublicRecent(ctx context.Context, limit int) ([]*paste.FileSummary, error)
+	IncrementDownloads(ctx context.Context, slug string) error
 }
+
 
 // FileStorage defines the interface for file disk operations.
 type FileStorage interface {
@@ -214,8 +216,13 @@ func (s *Service) ServeFile(ctx context.Context, slug string, w http.ResponseWri
 	}
 	defer reader.Close()
 
+	// Increment downloads!
+	_ = s.repo.IncrementDownloads(ctx, slug)
+	record.Downloads++
+
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`%s; filename="%s"`, disposition, record.Filename))
 	w.Header().Set("Content-Type", record.MIMEType)
+	w.Header().Set("X-Downloads-Count", strconv.Itoa(record.Downloads))
 
 	// Enable seeking in browser video players by announcing byte-range support.
 	w.Header().Set("Accept-Ranges", "bytes")
@@ -326,3 +333,9 @@ func (s *Service) ValidatePassword(ctx context.Context, slug, password string) (
 	}
 	return false, err
 }
+
+// IncrementDownloads increments the download count of a file by its slug.
+func (s *Service) IncrementDownloads(ctx context.Context, slug string) error {
+	return s.repo.IncrementDownloads(ctx, slug)
+}
+

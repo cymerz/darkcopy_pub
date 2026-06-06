@@ -29,6 +29,7 @@ type PasteItem struct {
 	HasPassword bool       `json:"has_password"`
 	CreatedAt   time.Time  `json:"created_at"`
 	ExpiresAt   *time.Time `json:"expires_at"`
+	Views       int        `json:"views"`
 }
 
 // FileItem is an admin-facing view of an uploaded file.
@@ -41,6 +42,7 @@ type FileItem struct {
 	HasPassword bool       `json:"has_password"`
 	CreatedAt   time.Time  `json:"created_at"`
 	ExpiresAt   *time.Time `json:"expires_at"`
+	Downloads   int        `json:"downloads"`
 }
 
 // ProviderStats holds sharding distribution stats for a single S3 provider.
@@ -56,6 +58,8 @@ type Stats struct {
 	TotalFiles    int             `json:"total_files"`
 	TotalBytes    int64           `json:"total_bytes"`
 	ProviderStats []ProviderStats `json:"provider_stats"`
+	TopPastes     []*PasteItem    `json:"top_pastes"`
+	TopFiles      []*FileItem     `json:"top_files"`
 }
 
 // PasteRepository defines the paste persistence operations needed by the admin
@@ -64,6 +68,7 @@ type PasteRepository interface {
 	ListAllPastes(ctx context.Context, limit, offset int) ([]*PasteItem, error)
 	DeletePasteBySlug(ctx context.Context, slug string) (bool, error)
 	CountPastes(ctx context.Context) (int, error)
+	ListTopPastes(ctx context.Context, limit int) ([]*PasteItem, error)
 }
 
 // FileRepository defines the file persistence operations needed by the admin
@@ -73,6 +78,8 @@ type FileRepository interface {
 	GetBySlug(ctx context.Context, slug string) (*paste.FileRecord, error)
 	DeleteFileBySlug(ctx context.Context, slug string) (bool, error)
 	CountFiles(ctx context.Context) (int, error)
+	ListTopFiles(ctx context.Context, limit int) ([]*FileItem, error)
+	SumFileSizes(ctx context.Context) (int64, error)
 }
 
 // FileStorage removes file blobs from the underlying storage.
@@ -163,52 +170,63 @@ func (s *Service) Stats(ctx context.Context) (*Stats, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	// Fetch all files metadata to calculate exact byte distribution
-	// Limit is set to 100,000 as a reasonable upper bound for fully-in-memory aggregation.
-	files, err := s.fileRepo.ListAllFiles(ctx, 100000, 0)
+	totalBytes, err := s.fileRepo.SumFileSizes(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	var totalBytes int64
-	for _, f := range files {
-		totalBytes += f.SizeBytes
+	topPastes, err := s.pasteRepo.ListTopPastes(ctx, 5)
+	if err != nil {
+		return nil, err
+	}
+	topFiles, err := s.fileRepo.ListTopFiles(ctx, 5)
+	if err != nil {
+		return nil, err
 	}
 
 	var providerStats []ProviderStats
 
-	// Check if storage is MultiS3Storage to calculate provider sharding stats
-	if multiStorage, ok := s.storage.(interface {
+	// Only query all files for sharding stats if MultiS3Storage is active and has > 1 providers
+	multiStorage, isMulti := s.storage.(interface {
 		GetProviderNames() []string
 		GetProviderIndex(storageKey string) int
-	}); ok {
+	})
+
+	if isMulti && len(multiStorage.GetProviderNames()) > 1 {
 		names := multiStorage.GetProviderNames()
-		if len(names) > 0 {
-			counts := make([]int, len(names))
-			sizes := make([]int64, len(names))
+		// Fetch all files metadata to calculate exact byte distribution
+		// Limit is set to 100,000 as a reasonable upper bound for fully-in-memory aggregation.
+		files, err := s.fileRepo.ListAllFiles(ctx, 100000, 0)
+		if err != nil {
+			return nil, err
+		}
 
-			for _, f := range files {
-				// Rebuild storage key: uploads/{slug}/{filename}
-				storageKey := "uploads/" + f.Slug + "/" + f.Filename
-				idx := multiStorage.GetProviderIndex(storageKey)
-				if idx >= 0 && idx < len(names) {
-					counts[idx]++
-					sizes[idx] += f.SizeBytes
-				}
-			}
+		counts := make([]int, len(names))
+		sizes := make([]int64, len(names))
 
-			for i, name := range names {
-				providerStats = append(providerStats, ProviderStats{
-					ProviderName: name,
-					FilesCount:   counts[i],
-					SizeBytes:    sizes[i],
-				})
+		for _, f := range files {
+			// Rebuild storage key: uploads/{slug}/{filename}
+			storageKey := "uploads/" + f.Slug + "/" + f.Filename
+			idx := multiStorage.GetProviderIndex(storageKey)
+			if idx >= 0 && idx < len(names) {
+				counts[idx]++
+				sizes[idx] += f.SizeBytes
 			}
 		}
+
+		for i, name := range names {
+			providerStats = append(providerStats, ProviderStats{
+				ProviderName: name,
+				FilesCount:   counts[i],
+				SizeBytes:    sizes[i],
+			})
+		}
 	} else {
-		// If single S3 bucket is active
+		// Single bucket active (no sharding needed)
 		providerName := "SINGLE BUCKET"
+		if isMulti && len(multiStorage.GetProviderNames()) == 1 {
+			providerName = multiStorage.GetProviderNames()[0]
+		}
 		if fileCount > 0 {
 			providerStats = append(providerStats, ProviderStats{
 				ProviderName: providerName,
@@ -223,6 +241,8 @@ func (s *Service) Stats(ctx context.Context) (*Stats, error) {
 		TotalFiles:    fileCount,
 		TotalBytes:    totalBytes,
 		ProviderStats: providerStats,
+		TopPastes:     topPastes,
+		TopFiles:      topFiles,
 	}, nil
 }
 

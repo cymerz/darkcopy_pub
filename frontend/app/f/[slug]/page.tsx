@@ -25,6 +25,7 @@ interface FileMetadata {
   filename: string;
   mimeType: string | null;
   sizeBytes: number | null;
+  downloads: number;
 }
 
 /**
@@ -72,7 +73,10 @@ function readFileMetadata(response: Response, slug: string): FileMetadata {
   const parsedSize = contentLength ? Number.parseInt(contentLength, 10) : NaN;
   const sizeBytes = Number.isFinite(parsedSize) ? parsedSize : null;
 
-  return { filename, mimeType, sizeBytes };
+  const downloadsHeader = response.headers.get('x-downloads-count');
+  const downloads = downloadsHeader ? Number.parseInt(downloadsHeader, 10) : 0;
+
+  return { filename, mimeType, sizeBytes, downloads };
 }
 
 /**
@@ -193,7 +197,7 @@ function FileInfo({
   slug: string;
   metadata: FileMetadata;
 }) {
-  const { filename, mimeType, sizeBytes } = metadata;
+  const { filename, mimeType, sizeBytes, downloads } = metadata;
   const downloadHref = `/api/f/${slug}/direct`;
   const previewHref = `/api/f/${slug}/direct?preview=true`;
   const category = getFileTypeCategory(filename, mimeType);
@@ -248,6 +252,10 @@ function FileInfo({
                 </dd>
               </div>
             )}
+            <div className="flex flex-wrap gap-x-2">
+              <dt className="text-gray-500 dark:text-gray-500">Unduhan:</dt>
+              <dd className="text-gray-800 dark:text-gray-200">{downloads} kali</dd>
+            </div>
           </dl>
         </div>
 

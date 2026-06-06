@@ -132,6 +132,8 @@ func (h *AdminHandler) HandleStats(w http.ResponseWriter, r *http.Request) {
 		"total_bytes":     stats.TotalBytes,
 		"provider_stats":  stats.ProviderStats,
 		"pending_reports": pendingReports,
+		"top_pastes":      stats.TopPastes,
+		"top_files":       stats.TopFiles,
 	})
 }
 

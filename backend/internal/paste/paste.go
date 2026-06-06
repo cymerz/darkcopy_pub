@@ -30,7 +30,9 @@ type Paste struct {
 	PasswordHash string
 	ExpiresAt    *time.Time
 	CreatedAt    time.Time
+	Views        int
 }
+
 
 // PasteSummary is a lightweight representation of a paste for listing.
 type PasteSummary struct {
@@ -74,7 +76,9 @@ type FileRecord struct {
 	PasswordHash string
 	ExpiresAt    *time.Time
 	CreatedAt    time.Time
+	Downloads    int
 }
+
 
 // UploadFileRequest contains the data needed to upload a new file.
 type UploadFileRequest struct {
@@ -134,4 +138,5 @@ type PasteService interface {
 	GetBySlug(ctx context.Context, slug string) (*Paste, error)
 	ValidatePassword(ctx context.Context, slug, password string) (bool, error)
 	ListPublicRecent(ctx context.Context, limit int) ([]*PasteSummary, error)
+	IncrementViews(ctx context.Context, slug string) error
 }

@@ -52,6 +52,11 @@ func (m *mockRepository) ListPublicRecent(ctx context.Context, limit int) ([]*Pa
 	return m.listPublicRecentResult, nil
 }
 
+func (m *mockRepository) IncrementViews(ctx context.Context, slug string) error {
+	return nil
+}
+
+
 // mockAccessController is a test double for access.AccessController.
 type mockAccessController struct {
 	checkResult access.AccessResult

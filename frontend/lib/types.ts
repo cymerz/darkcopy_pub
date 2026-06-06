@@ -81,6 +81,7 @@ export interface PasteViewResponse {
   created_at: string;
   expires_at: string | null;
   remaining_seconds: number | null;
+  views: number;
 }
 
 /**
@@ -149,6 +150,8 @@ export interface AdminStats {
   total_bytes?: number;
   pending_reports: number;
   provider_stats?: ProviderStats[];
+  top_pastes?: AdminPasteItem[];
+  top_files?: AdminFileItem[];
 }
 
 /**
@@ -163,6 +166,7 @@ export interface AdminPasteItem {
   has_password: boolean;
   created_at: string;
   expires_at: string | null;
+  views: number;
 }
 
 /**
@@ -177,6 +181,7 @@ export interface AdminFileItem {
   has_password: boolean;
   created_at: string;
   expires_at: string | null;
+  downloads: number;
 }
 
 /**

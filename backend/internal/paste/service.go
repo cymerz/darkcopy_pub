@@ -37,7 +37,9 @@ type PasteRepository interface {
 	InsertPaste(ctx context.Context, paste *Paste) error
 	GetBySlug(ctx context.Context, slug string) (*Paste, error)
 	ListPublicRecent(ctx context.Context, limit int) ([]*PasteSummary, error)
+	IncrementViews(ctx context.Context, slug string) error
 }
+
 
 // Service is the concrete implementation of PasteService.
 type Service struct {
@@ -208,3 +210,9 @@ func (s *Service) ValidatePassword(ctx context.Context, slug, password string) (
 
 	return result == access.AccessGranted, nil
 }
+
+// IncrementViews increments the view count of a paste by its slug.
+func (s *Service) IncrementViews(ctx context.Context, slug string) error {
+	return s.repo.IncrementViews(ctx, slug)
+}
+

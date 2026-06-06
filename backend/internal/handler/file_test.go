@@ -65,6 +65,11 @@ func (m *mockFileService) PresignDownloadURL(ctx context.Context, slug string, i
 	return "", file.ErrPresignUnsupported
 }
 
+func (m *mockFileService) IncrementDownloads(ctx context.Context, slug string) error {
+	return nil
+}
+
+
 // mockAccessCtrl is a mock implementation of AccessController for testing.
 type mockAccessCtrl struct {
 	isRateLimitedFn     func(ctx context.Context, ip, resource string) (bool, error)

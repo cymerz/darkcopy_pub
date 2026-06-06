@@ -48,6 +48,11 @@ func (m *mockFileRepository) ListPublicRecent(ctx context.Context, limit int) ([
 	return nil, nil
 }
 
+func (m *mockFileRepository) IncrementDownloads(ctx context.Context, slug string) error {
+	return nil
+}
+
+
 // mockFileStorage is a test double for FileStorage.
 type mockFileStorage struct {
 	savedKey    string

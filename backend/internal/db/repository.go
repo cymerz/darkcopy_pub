@@ -35,9 +35,9 @@ func (r *PasteRepo) GetBySlug(ctx context.Context, slug string) (*paste.Paste, e
 	p := &paste.Paste{}
 	var passwordHash *string
 	err := r.pool.QueryRow(ctx, `
-		SELECT id, slug, title, content, language, visibility, password_hash, expires_at, created_at
+		SELECT id, slug, title, content, language, visibility, password_hash, expires_at, created_at, views
 		FROM pastes WHERE slug = $1
-	`, slug).Scan(&p.ID, &p.Slug, &p.Title, &p.Content, &p.Language, &p.Visibility, &passwordHash, &p.ExpiresAt, &p.CreatedAt)
+	`, slug).Scan(&p.ID, &p.Slug, &p.Title, &p.Content, &p.Language, &p.Visibility, &passwordHash, &p.ExpiresAt, &p.CreatedAt, &p.Views)
 	if err != nil {
 		return nil, err
 	}
@@ -77,7 +77,7 @@ func (r *PasteRepo) ListPublicRecent(ctx context.Context, limit int) ([]*paste.P
 // by most recent first. Intended for administrative use only.
 func (r *PasteRepo) ListAllPastes(ctx context.Context, limit, offset int) ([]*admin.PasteItem, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT slug, title, language, visibility, (password_hash IS NOT NULL), created_at, expires_at
+		SELECT slug, title, language, visibility, (password_hash IS NOT NULL), created_at, expires_at, views
 		FROM pastes
 		ORDER BY created_at DESC
 		LIMIT $1 OFFSET $2
@@ -90,7 +90,7 @@ func (r *PasteRepo) ListAllPastes(ctx context.Context, limit, offset int) ([]*ad
 	var items []*admin.PasteItem
 	for rows.Next() {
 		item := &admin.PasteItem{}
-		if err := rows.Scan(&item.Slug, &item.Title, &item.Language, &item.Visibility, &item.HasPassword, &item.CreatedAt, &item.ExpiresAt); err != nil {
+		if err := rows.Scan(&item.Slug, &item.Title, &item.Language, &item.Visibility, &item.HasPassword, &item.CreatedAt, &item.ExpiresAt, &item.Views); err != nil {
 			return nil, err
 		}
 		items = append(items, item)
@@ -114,6 +114,37 @@ func (r *PasteRepo) CountPastes(ctx context.Context) (int, error) {
 	err := r.pool.QueryRow(ctx, `SELECT COUNT(*) FROM pastes`).Scan(&count)
 	return count, err
 }
+
+// IncrementViews increments the view count of a paste atomically.
+func (r *PasteRepo) IncrementViews(ctx context.Context, slug string) error {
+	_, err := r.pool.Exec(ctx, `UPDATE pastes SET views = views + 1 WHERE slug = $1`, slug)
+	return err
+}
+
+// ListTopPastes returns the top limit pastes by views count.
+func (r *PasteRepo) ListTopPastes(ctx context.Context, limit int) ([]*admin.PasteItem, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT slug, title, language, visibility, (password_hash IS NOT NULL), created_at, expires_at, views
+		FROM pastes
+		ORDER BY views DESC
+		LIMIT $1
+	`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var items []*admin.PasteItem
+	for rows.Next() {
+		item := &admin.PasteItem{}
+		if err := rows.Scan(&item.Slug, &item.Title, &item.Language, &item.Visibility, &item.HasPassword, &item.CreatedAt, &item.ExpiresAt, &item.Views); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
 
 // FileRepo implements file.FileRepository using pgxpool.
 type FileRepo struct {
@@ -139,9 +170,9 @@ func (r *FileRepo) GetBySlug(ctx context.Context, slug string) (*paste.FileRecor
 	f := &paste.FileRecord{}
 	var passwordHash *string
 	err := r.pool.QueryRow(ctx, `
-		SELECT id, slug, filename, mime_type, size_bytes, storage_key, visibility, password_hash, expires_at, created_at
+		SELECT id, slug, filename, mime_type, size_bytes, storage_key, visibility, password_hash, expires_at, created_at, downloads
 		FROM files WHERE slug = $1
-	`, slug).Scan(&f.ID, &f.Slug, &f.Filename, &f.MIMEType, &f.SizeBytes, &f.StorageKey, &f.Visibility, &passwordHash, &f.ExpiresAt, &f.CreatedAt)
+	`, slug).Scan(&f.ID, &f.Slug, &f.Filename, &f.MIMEType, &f.SizeBytes, &f.StorageKey, &f.Visibility, &passwordHash, &f.ExpiresAt, &f.CreatedAt, &f.Downloads)
 	if err != nil {
 		return nil, err
 	}
@@ -181,7 +212,7 @@ func (r *FileRepo) ListPublicRecent(ctx context.Context, limit int) ([]*paste.Fi
 // Intended for administrative use only.
 func (r *FileRepo) ListAllFiles(ctx context.Context, limit, offset int) ([]*admin.FileItem, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT slug, filename, mime_type, size_bytes, visibility, (password_hash IS NOT NULL), created_at, expires_at
+		SELECT slug, filename, mime_type, size_bytes, visibility, (password_hash IS NOT NULL), created_at, expires_at, downloads
 		FROM files
 		ORDER BY created_at DESC
 		LIMIT $1 OFFSET $2
@@ -194,7 +225,7 @@ func (r *FileRepo) ListAllFiles(ctx context.Context, limit, offset int) ([]*admi
 	var items []*admin.FileItem
 	for rows.Next() {
 		item := &admin.FileItem{}
-		if err := rows.Scan(&item.Slug, &item.Filename, &item.MIMEType, &item.SizeBytes, &item.Visibility, &item.HasPassword, &item.CreatedAt, &item.ExpiresAt); err != nil {
+		if err := rows.Scan(&item.Slug, &item.Filename, &item.MIMEType, &item.SizeBytes, &item.Visibility, &item.HasPassword, &item.CreatedAt, &item.ExpiresAt, &item.Downloads); err != nil {
 			return nil, err
 		}
 		items = append(items, item)
@@ -218,6 +249,44 @@ func (r *FileRepo) CountFiles(ctx context.Context) (int, error) {
 	err := r.pool.QueryRow(ctx, `SELECT COUNT(*) FROM files`).Scan(&count)
 	return count, err
 }
+
+// IncrementDownloads increments the download count of a file atomically.
+func (r *FileRepo) IncrementDownloads(ctx context.Context, slug string) error {
+	_, err := r.pool.Exec(ctx, `UPDATE files SET downloads = downloads + 1 WHERE slug = $1`, slug)
+	return err
+}
+
+// SumFileSizes returns the sum of size_bytes of all files in the database.
+func (r *FileRepo) SumFileSizes(ctx context.Context) (int64, error) {
+	var total int64
+	err := r.pool.QueryRow(ctx, `SELECT COALESCE(SUM(size_bytes), 0) FROM files`).Scan(&total)
+	return total, err
+}
+
+// ListTopFiles returns the top limit files by downloads count.
+func (r *FileRepo) ListTopFiles(ctx context.Context, limit int) ([]*admin.FileItem, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT slug, filename, mime_type, size_bytes, visibility, (password_hash IS NOT NULL), created_at, expires_at, downloads
+		FROM files
+		ORDER BY downloads DESC
+		LIMIT $1
+	`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var items []*admin.FileItem
+	for rows.Next() {
+		item := &admin.FileItem{}
+		if err := rows.Scan(&item.Slug, &item.Filename, &item.MIMEType, &item.SizeBytes, &item.Visibility, &item.HasPassword, &item.CreatedAt, &item.ExpiresAt, &item.Downloads); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
 type ExpiryStore struct {
 	pool *pgxpool.Pool
 }

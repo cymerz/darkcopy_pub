@@ -18,6 +18,7 @@ type PasteService interface {
 	GetBySlug(ctx context.Context, slug string) (*paste.Paste, error)
 	ValidatePassword(ctx context.Context, slug, password string) (bool, error)
 	ListPublicRecent(ctx context.Context, limit int) ([]*paste.PasteSummary, error)
+	IncrementViews(ctx context.Context, slug string) error
 }
 
 // SyntaxHighlighter defines the interface for syntax highlighting used by the handler.

@@ -68,6 +68,16 @@ export function PasteViewer({ paste }: PasteViewerProps) {
           ) : (
             <span>Tidak pernah kadaluarsa</span>
           )}
+
+          <span className="text-gray-300 dark:text-dark-600" aria-hidden="true">•</span>
+
+          <span className="inline-flex items-center gap-1.5">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="w-3.5 h-3.5" aria-hidden="true">
+              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+              <circle cx="12" cy="12" r="3" />
+            </svg>
+            <span>Dilihat {paste.views ?? 0} kali</span>
+          </span>
         </div>
       </header>
 
