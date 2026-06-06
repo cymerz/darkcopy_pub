@@ -26,7 +26,7 @@ export function Footer() {
           {/* Right: Navigation Links */}
           <nav className="flex flex-wrap justify-center items-center gap-x-6 gap-y-2 text-xs font-medium text-gray-500 dark:text-gray-400">
             <Link
-              href="https://github.com"
+              href="https://github.com/cymerz/darkcopy_pub"
               target="_blank"
               rel="noopener noreferrer"
               className="transition-colors hover:text-accent focus:outline-none"
