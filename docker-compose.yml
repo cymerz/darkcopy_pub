@@ -1,0 +1,73 @@
+version: "3.8"
+
+services:
+  # 1. PostgreSQL Database Service
+  db:
+    image: postgres:15-alpine
+    container_name: darkcopy-db
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-example_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-example_password_change_me}
+      POSTGRES_DB: ${POSTGRES_DB:-example_db}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # 2. Go API Backend Service
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: darkcopy-backend
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      PORT: 8080
+      DATABASE_URL: postgres://${POSTGRES_USER:-example_user}:${POSTGRES_PASSWORD:-example_password_change_me}@db:5432/${POSTGRES_DB:-example_db}?sslmode=disable
+      UPLOAD_DIR: ./uploads
+      CLEANUP_INTERVAL: ${CLEANUP_INTERVAL:-5m}
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-example_admin_token_change_me}
+      # S3 Configurations (optional)
+      S3_BUCKET: ${S3_BUCKET:-}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_ENDPOINT: ${S3_ENDPOINT:-}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-}
+    volumes:
+      - uploads_data:/app/uploads
+
+  # 3. Next.js Frontend Service
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: darkcopy-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    environment:
+      PORT: 3000
+      BACKEND_URL: http://backend:8080 # Next.js rewrites proxy endpoint
+      NODE_ENV: production
+
+volumes:
+  postgres_data:
+    driver: local
+  uploads_data:
+    driver: local

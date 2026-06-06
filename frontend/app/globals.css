@@ -1,0 +1,84 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  /* Light mode defaults */
+  :root {
+    --bg-primary: #ffffff;
+    --bg-secondary: #f8fafc;
+    --bg-tertiary: #f1f5f9;
+    --border-color: #e2e8f0;
+    --text-primary: #0f172a;
+    --text-secondary: #475569;
+    --text-muted: #94a3b8;
+  }
+
+  /* Dark mode overrides */
+  .dark {
+    --bg-primary: #07090e;      /* Deep luxurious midnight void */
+    --bg-secondary: #0f131a;    /* Premium slate card bg */
+    --bg-tertiary: #171e2b;     /* Deep metallic steel hover bg */
+    --border-color: #1c2433;    /* Polished steel grey border */
+    --text-primary: #f1f5f9;    /* Refined bright text */
+    --text-secondary: #94a3b8;  /* Muted slate blue text */
+    --text-muted: #64748b;      /* Metal grey helper text */
+  }
+
+  /* Custom scrollbar styling */
+  ::-webkit-scrollbar {
+    @apply w-2 h-2;
+  }
+
+  .dark ::-webkit-scrollbar-track {
+    @apply bg-dark-800;
+  }
+
+  .dark ::-webkit-scrollbar-thumb {
+    @apply bg-dark-500 rounded-full;
+  }
+
+  .dark ::-webkit-scrollbar-thumb:hover {
+    @apply bg-dark-400;
+  }
+
+  ::-webkit-scrollbar-track {
+    @apply bg-gray-100;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply bg-gray-300 rounded-full;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-gray-400;
+  }
+
+  /* Selection color */
+  ::selection {
+    @apply bg-accent/30 text-white;
+  }
+}
+
+@layer components {
+  /* Backend-generated syntax-highlighted code rendered by the Paste_Viewer */
+  .darkcopy-code pre {
+    margin: 0;
+    white-space: pre;
+    font-size: 0.875rem;
+    line-height: 1.5rem;
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+    background: transparent !important;
+  }
+
+  .darkcopy-code pre code {
+    font-size: inherit;
+    background: transparent !important;
+  }
+
+  /* Strip background from any inline-styled spans Chroma emits */
+  .darkcopy-code span {
+    background: transparent !important;
+  }
+}

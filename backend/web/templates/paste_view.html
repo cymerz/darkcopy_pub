@@ -1,0 +1,77 @@
+{{template "base" .}}
+
+{{define "title"}}{{if .Title}}{{.Title}} - {{end}}DarkCopy{{end}}
+
+{{define "content"}}
+<div class="card">
+    <h2 style="margin-bottom: 0.5rem;">{{if .Title}}{{.Title}}{{else}}Paste {{.Slug}}{{end}}</h2>
+
+    <div class="metadata">
+        <span>📝 {{.Language}}</span>
+        <span>📅 {{.CreatedAt.Format "2006-01-02 15:04 MST"}}</span>
+        {{if .ExpiresAt}}
+        <span id="expiry-display">⏳ Kadaluarsa: {{.ExpiresAt.Format "2006-01-02 15:04 MST"}}</span>
+        {{else}}
+        <span>♾️ Tidak pernah kadaluarsa</span>
+        {{end}}
+    </div>
+
+    {{if .RemainingSeconds}}
+    <div class="metadata" x-data="{ remaining: {{.RemainingSeconds}} }" x-init="
+        setInterval(() => { if (remaining > 0) remaining--; }, 1000)
+    ">
+        <span x-text="'⏱️ Sisa waktu: ' + 
+            (remaining >= 86400 ? Math.floor(remaining/86400) + ' hari ' : '') +
+            (remaining >= 3600 ? Math.floor((remaining%86400)/3600) + ' jam ' : '') +
+            Math.floor((remaining%3600)/60) + ' menit'">
+        </span>
+    </div>
+    {{end}}
+
+    <div class="actions">
+        <button class="btn btn-secondary btn-sm" onclick="copyContent()">📋 Salin</button>
+        <button class="btn btn-secondary btn-sm" onclick="downloadContent()">⬇️ Unduh</button>
+    </div>
+
+    <div class="code-container">
+        {{.HighlightedHTML | safeHTML}}
+    </div>
+</div>
+
+<script>
+(function() {
+    var contentEl = document.getElementById('paste-raw-content');
+    var content = contentEl ? contentEl.textContent : '';
+    var slug = "{{.Slug}}";
+    var title = "{{.Title}}";
+
+    window.copyContent = function() {
+        navigator.clipboard.writeText(content).then(function() {
+            alert('Konten berhasil disalin!');
+        }).catch(function() {
+            var textarea = document.createElement('textarea');
+            textarea.value = content;
+            document.body.appendChild(textarea);
+            textarea.select();
+            document.execCommand('copy');
+            document.body.removeChild(textarea);
+            alert('Konten berhasil disalin!');
+        });
+    };
+
+    window.downloadContent = function() {
+        var filename = (title || ("paste-" + slug)) + ".txt";
+        var blob = new Blob([content], { type: 'text/plain' });
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    };
+})();
+</script>
+<script id="paste-raw-content" type="application/json">{{.Content}}</script>
+{{end}}

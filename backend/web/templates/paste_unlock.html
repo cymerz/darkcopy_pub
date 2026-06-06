@@ -1,0 +1,25 @@
+{{template "base" .}}
+
+{{define "title"}}Paste Terlindungi - DarkCopy{{end}}
+
+{{define "content"}}
+<div class="card" style="max-width: 480px; margin: 2rem auto;">
+    <h2 style="margin-bottom: 0.5rem;">🔒 Paste Terlindungi</h2>
+    <p style="color: var(--text-muted); margin-bottom: 1.5rem;">
+        Paste ini dilindungi kata sandi. Masukkan password untuk melihat konten.
+    </p>
+
+    {{if .Error}}
+    <div class="alert alert-error">{{.Error}}</div>
+    {{end}}
+
+    <form method="POST" action="/{{.Slug}}/unlock">
+        <div class="form-group">
+            <label for="password">Password</label>
+            <input type="password" id="password" name="password" placeholder="Masukkan password" required autofocus>
+        </div>
+
+        <button type="submit" class="btn btn-primary">Buka Paste</button>
+    </form>
+</div>
+{{end}}

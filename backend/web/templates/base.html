@@ -1,0 +1,37 @@
+{{define "base"}}
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{block "title" .}}DarkCopy{{end}}</title>
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <header>
+        <div class="container">
+            <a href="/" class="site-name">DarkCopy</a>
+            <nav>
+                <a href="/">Home</a>
+                <a href="/new">New Paste</a>
+                <a href="/upload">Upload File</a>
+            </nav>
+        </div>
+    </header>
+
+    <main>
+        <div class="container">
+            {{block "content" .}}{{end}}
+        </div>
+    </main>
+
+    <footer>
+        <div class="container">
+            <p>DarkCopy &mdash; Berbagi teks dan file sementara dengan mudah.</p>
+        </div>
+    </footer>
+</body>
+</html>
+{{end}}

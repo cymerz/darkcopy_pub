@@ -1,0 +1,11 @@
+{{template "base" .}}
+
+{{define "title"}}Error {{.StatusCode}} - DarkCopy{{end}}
+
+{{define "content"}}
+<div class="error-page">
+    <div class="error-code">{{.StatusCode}}</div>
+    <p class="error-message">{{.Message}}</p>
+    <a href="/" class="btn btn-primary">← Kembali ke Beranda</a>
+</div>
+{{end}}

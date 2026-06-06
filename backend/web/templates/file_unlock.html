@@ -1,0 +1,25 @@
+{{template "base" .}}
+
+{{define "title"}}File Terlindungi - DarkCopy{{end}}
+
+{{define "content"}}
+<div class="card" style="max-width: 480px; margin: 2rem auto;">
+    <h2 style="margin-bottom: 0.5rem;">🔒 File Terlindungi</h2>
+    <p style="color: var(--text-muted); margin-bottom: 1.5rem;">
+        File ini dilindungi kata sandi. Masukkan password untuk mengunduh file.
+    </p>
+
+    {{if .Error}}
+    <div class="alert alert-error">{{.Error}}</div>
+    {{end}}
+
+    <form method="POST" action="/f/{{.Slug}}/unlock">
+        <div class="form-group">
+            <label for="password">Password</label>
+            <input type="password" id="password" name="password" placeholder="Masukkan password" required autofocus>
+        </div>
+
+        <button type="submit" class="btn btn-primary">Unduh File</button>
+    </form>
+</div>
+{{end}}

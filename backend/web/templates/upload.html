@@ -1,0 +1,93 @@
+{{template "base" .}}
+
+{{define "title"}}Upload File - DarkCopy{{end}}
+
+{{define "content"}}
+<div class="card">
+    <h2 style="margin-bottom: 1.25rem;">Upload File</h2>
+
+    {{if .Error}}
+    <div class="alert alert-error">{{.Error}}</div>
+    {{end}}
+
+    <form method="POST" action="/upload" enctype="multipart/form-data"
+          x-data="{
+              visibility: 'public',
+              dragging: false,
+              fileName: '',
+              uploaded: false,
+              uploadURL: '',
+              handleDrop(e) {
+                  this.dragging = false;
+                  if (e.dataTransfer.files.length > 0) {
+                      this.$refs.fileInput.files = e.dataTransfer.files;
+                      this.fileName = e.dataTransfer.files[0].name;
+                  }
+              },
+              handleFileSelect(e) {
+                  if (e.target.files.length > 0) {
+                      this.fileName = e.target.files[0].name;
+                  }
+              }
+          }">
+
+        <div class="form-group">
+            <label>File (maks. 100 MB)</label>
+            <div class="drop-zone"
+                 :class="{ 'dragging': dragging }"
+                 @dragover.prevent="dragging = true"
+                 @dragleave.prevent="dragging = false"
+                 @drop.prevent="handleDrop($event)"
+                 @click="$refs.fileInput.click()">
+                <p x-show="!fileName">📁 Seret file ke sini atau klik untuk memilih</p>
+                <p class="file-name" x-show="fileName" x-text="'📄 ' + fileName"></p>
+            </div>
+            <input type="file" name="file" x-ref="fileInput" @change="handleFileSelect($event)" style="display: none;" required>
+        </div>
+
+        <div class="form-group">
+            <label for="expires_in">Waktu Kadaluarsa</label>
+            <select id="expires_in" name="expires_in">
+                {{range .ExpiryOptions}}
+                <option value="{{.Duration.Minutes}}">{{.Label}}</option>
+                {{end}}
+            </select>
+        </div>
+
+        <div class="form-group">
+            <label>Visibilitas</label>
+            <div class="radio-group">
+                <label>
+                    <input type="radio" name="visibility" value="public" x-model="visibility" checked>
+                    Publik
+                </label>
+                <label>
+                    <input type="radio" name="visibility" value="unlisted" x-model="visibility">
+                    Unlisted
+                </label>
+                <label>
+                    <input type="radio" name="visibility" value="password_protected" x-model="visibility">
+                    Dilindungi Password
+                </label>
+            </div>
+        </div>
+
+        <div class="form-group" x-show="visibility === 'password_protected'" x-transition>
+            <label for="password">Password</label>
+            <input type="password" id="password" name="password" placeholder="Masukkan password">
+        </div>
+
+        <button type="submit" class="btn btn-primary">Upload File</button>
+    </form>
+
+    {{if .Success}}
+    <div style="margin-top: 1.5rem;">
+        <div class="alert alert-success">File berhasil diunggah!</div>
+        <div class="success-url">
+            <code>{{.UploadURL}}</code>
+            <button class="btn btn-sm btn-secondary" onclick="navigator.clipboard.writeText('{{.UploadURL}}')">📋 Salin URL</button>
+        </div>
+    </div>
+    {{end}}
+</div>
+{{end}}

@@ -1,0 +1,45 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Next.js build output
+.next/
+out/
+build/
+dist/
+
+# Next.js local env files
+frontend/.env.local
+frontend/.env.development.local
+frontend/.env.production.local
+frontend/.env.test.local
+
+# Backend local env files
+backend/.env
+backend/.env.local
+
+# Compiled binaries and executable files
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+backend/server
+
+# Local uploads and temporary storage files
+backend/uploads/
+backend/tmp/
+
+# IDE and Editor files
+.vscode/
+.idea/
+.kiro/
+*.suo
+*.ntvsca
+*.njsproj
+*.sln
+*.swp
+
+# OS-specific files
+.DS_Store
+Thumbs.db

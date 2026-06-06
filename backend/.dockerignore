@@ -1,0 +1,6 @@
+.env
+.env.local
+uploads
+tmp
+.git
+.kiro

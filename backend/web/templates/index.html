@@ -1,0 +1,36 @@
+{{template "base" .}}
+
+{{define "title"}}DarkCopy - Home{{end}}
+
+{{define "content"}}
+<div class="card">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+        <h2>Paste Publik Terbaru</h2>
+        <div style="display: flex; gap: 0.75rem;">
+            <a href="/new" class="btn btn-primary btn-sm">New Paste</a>
+            <a href="/upload" class="btn btn-secondary btn-sm">Upload File</a>
+        </div>
+    </div>
+
+    {{if .Pastes}}
+    <ul class="paste-list">
+        {{range .Pastes}}
+        <li>
+            <div>
+                <a href="/{{.Slug}}" class="paste-title">
+                    {{if .Title}}{{.Title}}{{else}}{{.Slug}}{{end}}
+                </a>
+                <div class="paste-meta">
+                    <span>{{.Language}}</span> &middot;
+                    <span>{{.CreatedAt.Format "2006-01-02 15:04"}}</span>
+                </div>
+            </div>
+            <code style="font-size: 0.8rem; color: var(--text-muted);">/{{.Slug}}</code>
+        </li>
+        {{end}}
+    </ul>
+    {{else}}
+    <p style="color: var(--text-muted); text-align: center; padding: 2rem;">Belum ada paste publik.</p>
+    {{end}}
+</div>
+{{end}}
