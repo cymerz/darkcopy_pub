@@ -2,10 +2,12 @@ package db
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/redis/go-redis/v9"
 	"github.com/gthbn/pastebin/internal/admin"
 	"github.com/gthbn/pastebin/internal/expiry"
 	"github.com/gthbn/pastebin/internal/paste"
@@ -14,11 +16,18 @@ import (
 // PasteRepo implements paste.PasteRepository using pgxpool.
 type PasteRepo struct {
 	pool *pgxpool.Pool
+	rdb  *redis.Client
 }
 
 // NewPasteRepo creates a new PasteRepo.
 func NewPasteRepo(pool *pgxpool.Pool) *PasteRepo {
 	return &PasteRepo{pool: pool}
+}
+
+// WithRedis sets the Redis client for caching and count buffering.
+func (r *PasteRepo) WithRedis(rdb *redis.Client) *PasteRepo {
+	r.rdb = rdb
+	return r
 }
 
 // InsertPaste inserts a new paste into the database.
@@ -32,6 +41,21 @@ func (r *PasteRepo) InsertPaste(ctx context.Context, p *paste.Paste) error {
 
 // GetBySlug retrieves a paste by its slug.
 func (r *PasteRepo) GetBySlug(ctx context.Context, slug string) (*paste.Paste, error) {
+	if r.rdb != nil {
+		cacheKey := "paste:cache:" + slug
+		cachedVal, err := r.rdb.Get(ctx, cacheKey).Bytes()
+		if err == nil {
+			var p paste.Paste
+			if jsonErr := json.Unmarshal(cachedVal, &p); jsonErr == nil {
+				return &p, nil
+			}
+		}
+	}
+
+	if r.pool == nil {
+		return nil, nil
+	}
+
 	p := &paste.Paste{}
 	var passwordHash *string
 	err := r.pool.QueryRow(ctx, `
@@ -44,6 +68,24 @@ func (r *PasteRepo) GetBySlug(ctx context.Context, slug string) (*paste.Paste, e
 	if passwordHash != nil {
 		p.PasswordHash = *passwordHash
 	}
+
+	if r.rdb != nil {
+		cachedVal, jsonErr := json.Marshal(p)
+		if jsonErr == nil {
+			ttl := 10 * time.Minute
+			if p.ExpiresAt != nil {
+				remaining := time.Until(*p.ExpiresAt)
+				if remaining <= 0 {
+					return p, nil // already expired
+				}
+				if remaining < ttl {
+					ttl = remaining
+				}
+			}
+			_ = r.rdb.Set(ctx, "paste:cache:"+slug, cachedVal, ttl).Err()
+		}
+	}
+
 	return p, nil
 }
 
@@ -101,6 +143,12 @@ func (r *PasteRepo) ListAllPastes(ctx context.Context, limit, offset int) ([]*ad
 // DeletePasteBySlug deletes a paste by its slug. It returns true if a row was
 // deleted, false if no paste matched the slug.
 func (r *PasteRepo) DeletePasteBySlug(ctx context.Context, slug string) (bool, error) {
+	if r.rdb != nil {
+		_ = r.rdb.Del(ctx, "paste:cache:"+slug)
+	}
+	if r.pool == nil {
+		return true, nil
+	}
 	tag, err := r.pool.Exec(ctx, `DELETE FROM pastes WHERE slug = $1`, slug)
 	if err != nil {
 		return false, err
@@ -117,6 +165,9 @@ func (r *PasteRepo) CountPastes(ctx context.Context) (int, error) {
 
 // IncrementViews increments the view count of a paste atomically.
 func (r *PasteRepo) IncrementViews(ctx context.Context, slug string) error {
+	if r.rdb != nil {
+		return r.rdb.HIncrBy(ctx, "paste:views", slug, 1).Err()
+	}
 	_, err := r.pool.Exec(ctx, `UPDATE pastes SET views = views + 1 WHERE slug = $1`, slug)
 	return err
 }
@@ -149,11 +200,18 @@ func (r *PasteRepo) ListTopPastes(ctx context.Context, limit int) ([]*admin.Past
 // FileRepo implements file.FileRepository using pgxpool.
 type FileRepo struct {
 	pool *pgxpool.Pool
+	rdb  *redis.Client
 }
 
 // NewFileRepo creates a new FileRepo.
 func NewFileRepo(pool *pgxpool.Pool) *FileRepo {
 	return &FileRepo{pool: pool}
+}
+
+// WithRedis sets the Redis client for count buffering.
+func (r *FileRepo) WithRedis(rdb *redis.Client) *FileRepo {
+	r.rdb = rdb
+	return r
 }
 
 // InsertFile inserts a new file record into the database.
@@ -252,6 +310,9 @@ func (r *FileRepo) CountFiles(ctx context.Context) (int, error) {
 
 // IncrementDownloads increments the download count of a file atomically.
 func (r *FileRepo) IncrementDownloads(ctx context.Context, slug string) error {
+	if r.rdb != nil {
+		return r.rdb.HIncrBy(ctx, "file:downloads", slug, 1).Err()
+	}
 	_, err := r.pool.Exec(ctx, `UPDATE files SET downloads = downloads + 1 WHERE slug = $1`, slug)
 	return err
 }
@@ -289,11 +350,18 @@ func (r *FileRepo) ListTopFiles(ctx context.Context, limit int) ([]*admin.FileIt
 
 type ExpiryStore struct {
 	pool *pgxpool.Pool
+	rdb  *redis.Client
 }
 
 // NewExpiryStore creates a new ExpiryStore.
 func NewExpiryStore(pool *pgxpool.Pool) *ExpiryStore {
 	return &ExpiryStore{pool: pool}
+}
+
+// WithRedis sets the Redis client for cache invalidation.
+func (r *ExpiryStore) WithRedis(rdb *redis.Client) *ExpiryStore {
+	r.rdb = rdb
+	return r
 }
 
 // ListExpiredPastes returns up to `limit` pastes with expires_at < now.
@@ -321,6 +389,16 @@ func (r *ExpiryStore) ListExpiredPastes(ctx context.Context, now time.Time, limi
 
 // DeletePaste deletes a paste by its ID.
 func (r *ExpiryStore) DeletePaste(ctx context.Context, id uuid.UUID) error {
+	if r.rdb != nil && r.pool != nil {
+		var slug string
+		err := r.pool.QueryRow(ctx, `SELECT slug FROM pastes WHERE id = $1`, id).Scan(&slug)
+		if err == nil {
+			_ = r.rdb.Del(ctx, "paste:cache:"+slug)
+		}
+	}
+	if r.pool == nil {
+		return nil
+	}
 	_, err := r.pool.Exec(ctx, `DELETE FROM pastes WHERE id = $1`, id)
 	return err
 }

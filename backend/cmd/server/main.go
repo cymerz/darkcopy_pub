@@ -14,6 +14,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/redis/go-redis/v9"
 	"github.com/gthbn/pastebin/internal/access"
 	"github.com/gthbn/pastebin/internal/admin"
 	"github.com/gthbn/pastebin/internal/db"
@@ -65,6 +66,7 @@ func main() {
 	port := envOrDefault("PORT", "8080")
 	uploadDir := envOrDefault("UPLOAD_DIR", "./uploads")
 	adminToken := os.Getenv("ADMIN_TOKEN")
+	redisURL := os.Getenv("REDIS_URL")
 
 	// Cleanup interval for the expiry sweep (Go duration, e.g. "5m", "1h").
 	// Defaults to the manager's built-in interval when unset or invalid.
@@ -95,10 +97,36 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Initialize Redis client if configured.
+	var rdb *redis.Client
+	if redisURL != "" {
+		opt, err := redis.ParseURL(redisURL)
+		if err != nil {
+			logger.Error("invalid REDIS_URL", "error", err)
+			os.Exit(1)
+		}
+		rdb = redis.NewClient(opt)
+
+		// Verify connection
+		pingCtx, pingCancel := context.WithTimeout(ctx, 3*time.Second)
+		if err := rdb.Ping(pingCtx).Err(); err != nil {
+			logger.Error("failed to connect to Redis, disabling Redis integration", "error", err)
+			rdb = nil
+		} else {
+			logger.Info("connected to Redis successfully")
+		}
+		pingCancel()
+	}
+
 	// Initialize repositories.
 	pasteRepo := db.NewPasteRepo(pool)
 	fileRepo := db.NewFileRepo(pool)
 	expiryStore := db.NewExpiryStore(pool)
+	if rdb != nil {
+		pasteRepo = pasteRepo.WithRedis(rdb)
+		fileRepo = fileRepo.WithRedis(rdb)
+		expiryStore = expiryStore.WithRedis(rdb)
+	}
 	settingsRepo := db.NewSettingsRepo(pool)
 	reportRepo := db.NewReportRepo(pool)
 
@@ -117,12 +145,20 @@ func main() {
 	settingsProvider := settings.NewProvider(currentSettings)
 	settingsMgr := settings.NewManager(settingsProvider, settingsRepo)
 
-	// Per-IP daily quota counter (in-memory, resets at UTC midnight / on restart).
-	dailyQuota := quota.NewCounter()
-	dailySizeQuota := quota.NewSizeCounter()
+	// Initialize Quota Counter.
+	var dailyQuota handler.DailyQuota = quota.NewCounter()
+	var dailySizeQuota handler.DailySizeQuota = quota.NewSizeCounter()
+	if rdb != nil {
+		dailyQuota = quota.NewRedisCounter(rdb)
+		dailySizeQuota = quota.NewRedisSizeCounter(rdb)
+	}
 
 	// Initialize services.
-	accessCtl := access.NewController()
+	var rateLimitStore access.RateLimitStore
+	if rdb != nil {
+		rateLimitStore = access.NewRedisRateLimitStore(rdb)
+	}
+	accessCtl := access.NewController(rateLimitStore)
 	highlighter := highlight.NewChromaHighlighter("")
 
 	// Create a SlugExistsFunc that queries both pastes and files tables.
@@ -217,8 +253,26 @@ func main() {
 	fileSvc := file.NewService(fileRepo, fileStorage, urlGen)
 	fileSvc.SetMaxFileSizeFunc(settingsProvider.MaxFileSize)
 
+	// Initialize distributed locker for expiry manager if Redis is active.
+	var locker expiry.Locker
+	if rdb != nil {
+		locker = expiry.NewRedisLocker(rdb)
+	}
+
 	// Initialize expiry manager.
-	expiryMgr := expiry.NewManager(expiryStore, fileStorage, expiry.WithLogger(logger), expiry.WithInterval(cleanupInterval))
+	expiryMgr := expiry.NewManager(
+		expiryStore,
+		fileStorage,
+		expiry.WithLogger(logger),
+		expiry.WithInterval(cleanupInterval),
+		expiry.WithLocker(locker),
+	)
+
+	if rdb != nil {
+		// Flush views/downloads from Redis to PostgreSQL every 10 seconds
+		db.StartFlusher(ctx, rdb, pool, 10*time.Second, logger)
+		logger.Info("started views/downloads flusher background task")
+	}
 
 	// The admin service can trigger an on-demand purge via the expiry manager.
 	adminSvc := admin.NewService(pasteRepo, fileRepo, fileStorage, expiryMgr)
