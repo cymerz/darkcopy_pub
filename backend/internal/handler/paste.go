@@ -375,23 +375,10 @@ func (h *PasteHandler) HandleUnlock(w http.ResponseWriter, r *http.Request) {
 }
 
 // extractIP extracts the client IP address from the request, stripping the port.
+// SECURITY (VULN-04): This function now relies solely on r.RemoteAddr, which is
+// set by the trusted-proxy-aware RealIPMiddleware. It no longer reads forwarded
+// headers directly, preventing IP spoofing when the server is exposed without a proxy.
 func extractIP(r *http.Request) string {
-	// 1. Check Cloudflare-specific header
-	if cfip := r.Header.Get("CF-Connecting-IP"); cfip != "" {
-		return cfip
-	}
-	// 2. Check X-Forwarded-For header (set by OpenResty/Nginx)
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		ips := strings.Split(xff, ",")
-		if clientIP := strings.TrimSpace(ips[0]); clientIP != "" {
-			return clientIP
-		}
-	}
-	// 3. Check X-Real-IP header
-	if xri := r.Header.Get("X-Real-IP"); xri != "" {
-		return xri
-	}
-	// 4. Fallback to RemoteAddr
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr

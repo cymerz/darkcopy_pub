@@ -281,15 +281,24 @@ func (h *FileHandler) GetFile(w http.ResponseWriter, r *http.Request) {
 		ctx = context.WithValue(ctx, "range_header", rangeHeader)
 	}
 
+	// SECURITY (VULN-03): Force attachment for dangerous MIME types to prevent stored XSS.
+	mimeNormalized := strings.ToLower(strings.TrimSpace(record.MIMEType))
+	if file.IsDangerousMIME(mimeNormalized) {
+		inline = false
+	}
+
 	// Serve the file.
 	if r.Method == "HEAD" {
 		disposition := "attachment"
 		if inline {
 			disposition = "inline"
 		}
+		// SECURITY (VULN-01): Sanitize filename in Content-Disposition header.
+		safeName := strings.NewReplacer(`"`, `'`, "\r", "", "\n", "", "\x00", "").Replace(record.Filename)
 		w.Header().Set("Content-Type", record.MIMEType)
-		w.Header().Set("Content-Disposition", fmt.Sprintf(`%s; filename="%s"`, disposition, record.Filename))
+		w.Header().Set("Content-Disposition", fmt.Sprintf(`%s; filename="%s"`, disposition, safeName))
 		w.Header().Set("Content-Length", strconv.FormatInt(record.SizeBytes, 10))
+		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Downloads-Count", strconv.Itoa(record.Downloads))
 		w.WriteHeader(http.StatusOK)
 		return
@@ -513,23 +522,10 @@ func handleFileServiceError(w http.ResponseWriter, err error) {
 }
 
 // fileClientIP extracts the client IP address from the request.
+// SECURITY (VULN-04): This function now relies solely on r.RemoteAddr, which is
+// set by the trusted-proxy-aware RealIPMiddleware. It no longer reads forwarded
+// headers directly, preventing IP spoofing when the server is exposed without a proxy.
 func fileClientIP(r *http.Request) string {
-	// 1. Check Cloudflare-specific header
-	if cfip := r.Header.Get("CF-Connecting-IP"); cfip != "" {
-		return cfip
-	}
-	// 2. Check X-Forwarded-For header (set by OpenResty/Nginx)
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		ips := strings.Split(xff, ",")
-		if clientIP := strings.TrimSpace(ips[0]); clientIP != "" {
-			return clientIP
-		}
-	}
-	// 3. Check X-Real-IP header
-	if xri := r.Header.Get("X-Real-IP"); xri != "" {
-		return xri
-	}
-	// 4. Fallback to RemoteAddr
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr
@@ -559,11 +555,28 @@ func (h *FileHandler) HandlePresignUpload(w http.ResponseWriter, r *http.Request
 	}
 
 	var req presignUploadRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, errorResponse{
 			Error:  "Payload request tidak valid",
 			Code:   "BAD_REQUEST",
 			Status: http.StatusBadRequest,
+		})
+		return
+	}
+
+	// SECURITY (VULN-02): Enforce max file size BEFORE issuing the pre-signed URL.
+	// Without this, clients could bypass size limits by uploading directly to S3.
+	maxSize := int64(file.MaxFileSize)
+	if h.settings != nil {
+		if s := h.settings.Get().MaxFileSizeBytes; s > 0 {
+			maxSize = s
+		}
+	}
+	if req.SizeBytes <= 0 || req.SizeBytes > maxSize {
+		writeJSON(w, http.StatusRequestEntityTooLarge, errorResponse{
+			Error:  fmt.Sprintf("Ukuran file melebihi batas maksimum %s", formatBytes(maxSize)),
+			Code:   "FILE_TOO_LARGE",
+			Status: http.StatusRequestEntityTooLarge,
 		})
 		return
 	}
@@ -658,10 +671,20 @@ func (h *FileHandler) HandleRegisterUploadedFile(w http.ResponseWriter, r *http.
 	}
 
 	var req registerUploadedFileRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, errorResponse{
 			Error:  "Payload request tidak valid",
 			Code:   "BAD_REQUEST",
+			Status: http.StatusBadRequest,
+		})
+		return
+	}
+
+	// SECURITY (VULN-05): Validate visibility enum to prevent arbitrary values.
+	if !isValidVisibility(req.Visibility) {
+		writeJSON(w, http.StatusBadRequest, errorResponse{
+			Error:  "Nilai visibilitas tidak valid",
+			Code:   "INVALID_VISIBILITY",
 			Status: http.StatusBadRequest,
 		})
 		return
@@ -699,4 +722,28 @@ func (h *FileHandler) HandleRegisterUploadedFile(w http.ResponseWriter, r *http.
 		"slug":    record.Slug,
 		"url":     fmt.Sprintf("/f/%s", record.Slug),
 	})
+}
+
+// isValidVisibility returns true if the given visibility string is one of the
+// allowed values. Prevents storing arbitrary enum values.
+func isValidVisibility(v string) bool {
+	switch v {
+	case "public", "unlisted", "password_protected":
+		return true
+	default:
+		return false
+	}
+}
+
+// formatBytes formats a byte count into a human-readable string (e.g. "100 MB").
+func formatBytes(b int64) string {
+	const mb = 1024 * 1024
+	if b >= mb {
+		return fmt.Sprintf("%d MB", b/mb)
+	}
+	const kb = 1024
+	if b >= kb {
+		return fmt.Sprintf("%d KB", b/kb)
+	}
+	return fmt.Sprintf("%d bytes", b)
 }

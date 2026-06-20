@@ -43,6 +43,24 @@ var (
 	ErrInvalidSlug      = errors.New("Format slug tidak valid")
 )
 
+// dangerousMIMETypes contains MIME types that must never be served inline
+// because browsers will execute scripts/markup contained within them.
+var dangerousMIMETypes = map[string]bool{
+	"text/html":                true,
+	"application/xhtml+xml":    true,
+	"application/javascript":   true,
+	"text/javascript":          true,
+	"image/svg+xml":            true,
+	"application/xml":          true,
+	"text/xml":                 true,
+}
+
+// IsDangerousMIME returns true if the given (lowercased) MIME type should
+// never be served inline to prevent stored XSS attacks.
+func IsDangerousMIME(mime string) bool {
+	return dangerousMIMETypes[mime]
+}
+
 // FileRepository defines the interface for file persistence operations.
 type FileRepository interface {
 	InsertFile(ctx context.Context, file *paste.FileRecord) error
@@ -214,6 +232,13 @@ func (s *Service) ServeFile(ctx context.Context, slug string, w http.ResponseWri
 		}
 	}
 
+	// SECURITY (VULN-03): Force attachment for dangerous MIME types to prevent stored XSS.
+	// Browsers will execute HTML/SVG/JS if served inline, so we block that regardless of user preference.
+	mimeNormalized := strings.ToLower(strings.TrimSpace(record.MIMEType))
+	if dangerousMIMETypes[mimeNormalized] {
+		inline = false
+	}
+
 	disposition := "attachment"
 	if inline {
 		disposition = "inline"
@@ -231,8 +256,12 @@ func (s *Service) ServeFile(ctx context.Context, slug string, w http.ResponseWri
 	_ = s.repo.IncrementDownloads(ctx, slug)
 	record.Downloads++
 
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`%s; filename="%s"`, disposition, record.Filename))
+	// SECURITY (VULN-01): Sanitize filename for Content-Disposition header to prevent
+	// HTTP response splitting via double-quote or CRLF injection.
+	safeName := sanitizeHeaderValue(record.Filename)
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`%s; filename="%s"`, disposition, safeName))
 	w.Header().Set("Content-Type", record.MIMEType)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("X-Downloads-Count", strconv.Itoa(record.Downloads))
 
 	// Enable seeking in browser video players by announcing byte-range support.
@@ -476,5 +505,17 @@ func sanitizeFilename(filename string) string {
 		filename = "uploaded_file"
 	}
 	return filename
+}
+
+// sanitizeHeaderValue removes characters that could enable HTTP response splitting
+// or break out of a quoted header parameter (CRLF injection, double-quote escape).
+func sanitizeHeaderValue(s string) string {
+	r := strings.NewReplacer(
+		`"`, `'`,  // Replace double quotes with single quotes
+		"\r", "",  // Strip carriage return
+		"\n", "",  // Strip newline
+		"\x00", "", // Strip null bytes
+	)
+	return r.Replace(s)
 }
 

@@ -366,35 +366,111 @@ func envOrBool(key string) bool {
 	return v == "true" || v == "1" || v == "yes" || v == "on"
 }
 
-// RealIPMiddleware is a custom, highly robust middleware to resolve the real
-// client IP address when behind multiple proxies (Cloudflare -> aaPanel OpenResty -> Next.js Proxy -> Go).
+// RealIPMiddleware resolves the real client IP address from forwarded headers,
+// but ONLY when the direct connection originates from a trusted proxy.
+//
+// SECURITY (VULN-04): Without this check, any client connecting directly to the
+// Go server could forge CF-Connecting-IP / X-Forwarded-For headers to bypass
+// rate limiting and daily upload quotas.
+//
+// Trusted proxies are configured via the TRUSTED_PROXIES env var (comma-separated
+// CIDRs or IPs). When empty, private/loopback networks are trusted by default
+// (safe for typical reverse-proxy deployments).
 func RealIPMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		clientIP := ""
+	trustedNets := parseTrustedProxies(os.Getenv("TRUSTED_PROXIES"))
 
-		// 1. Check Cloudflare-specific header
-		if cfip := r.Header.Get("CF-Connecting-IP"); cfip != "" {
-			clientIP = cfip
-		} else if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-			// 2. Check X-Forwarded-For header and get the very first client IP
-			ips := strings.Split(xff, ",")
-			if firstIP := strings.TrimSpace(ips[0]); firstIP != "" {
-				clientIP = firstIP
-			}
-		} else if xri := r.Header.Get("X-Real-IP"); xri != "" {
-			// 3. Check X-Real-IP fallback
-			clientIP = xri
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Extract the direct connection IP (the proxy's IP, not the client's).
+		directIP, _, _ := net.SplitHostPort(r.RemoteAddr)
+		if directIP == "" {
+			directIP = r.RemoteAddr
 		}
 
-		// If a real client IP was successfully extracted, override r.RemoteAddr
-		if clientIP != "" {
-			if _, port, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-				r.RemoteAddr = net.JoinHostPort(clientIP, port)
-			} else {
-				r.RemoteAddr = clientIP
+		// Only trust forwarded headers if the direct connection is from a trusted proxy.
+		if isTrustedProxy(directIP, trustedNets) {
+			clientIP := ""
+
+			// 1. Check Cloudflare-specific header
+			if cfip := r.Header.Get("CF-Connecting-IP"); cfip != "" {
+				clientIP = cfip
+			} else if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+				// 2. Check X-Forwarded-For header and get the very first client IP
+				ips := strings.Split(xff, ",")
+				if firstIP := strings.TrimSpace(ips[0]); firstIP != "" {
+					clientIP = firstIP
+				}
+			} else if xri := r.Header.Get("X-Real-IP"); xri != "" {
+				// 3. Check X-Real-IP fallback
+				clientIP = xri
+			}
+
+			// If a real client IP was successfully extracted, override r.RemoteAddr
+			if clientIP != "" {
+				if _, port, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+					r.RemoteAddr = net.JoinHostPort(clientIP, port)
+				} else {
+					r.RemoteAddr = clientIP
+				}
 			}
 		}
 
 		next.ServeHTTP(w, r)
 	})
 }
+
+// parseTrustedProxies parses a comma-separated list of CIDRs and IPs into
+// a slice of *net.IPNet. When the input is empty, it returns the default
+// private/loopback networks (safe for typical reverse-proxy deployments).
+func parseTrustedProxies(raw string) []*net.IPNet {
+	// Default: trust private networks and loopback (RFC1918, RFC4193, localhost).
+	defaults := []string{
+		"127.0.0.0/8",    // IPv4 loopback
+		"10.0.0.0/8",     // RFC1918 Class A
+		"172.16.0.0/12",  // RFC1918 Class B
+		"192.168.0.0/16", // RFC1918 Class C
+		"::1/128",        // IPv6 loopback
+		"fc00::/7",       // IPv6 unique local
+	}
+
+	sources := defaults
+	if raw != "" {
+		sources = strings.Split(raw, ",")
+	}
+
+	var nets []*net.IPNet
+	for _, s := range sources {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		// If it's a bare IP (no /mask), add a host mask.
+		if !strings.Contains(s, "/") {
+			if strings.Contains(s, ":") {
+				s += "/128"
+			} else {
+				s += "/32"
+			}
+		}
+		_, cidr, err := net.ParseCIDR(s)
+		if err == nil {
+			nets = append(nets, cidr)
+		}
+	}
+	return nets
+}
+
+// isTrustedProxy checks whether the given IP address falls within any of
+// the trusted proxy networks.
+func isTrustedProxy(ip string, trusted []*net.IPNet) bool {
+	parsed := net.ParseIP(ip)
+	if parsed == nil {
+		return false
+	}
+	for _, n := range trusted {
+		if n.Contains(parsed) {
+			return true
+		}
+	}
+	return false
+}
+
