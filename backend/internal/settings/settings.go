@@ -58,6 +58,9 @@ type Settings struct {
 	// MaxDailyUploadBytesPerIP limits the total uploaded size (in bytes) per individual IP per day.
 	// 0 means unlimited.
 	MaxDailyUploadBytesPerIP int64 `json:"max_daily_upload_bytes_per_ip"`
+	// UseDirectUpload enables direct client-to-S3 uploads using pre-signed PUT URLs.
+	// Falls back to proxy upload if the storage provider does not support it.
+	UseDirectUpload bool `json:"use_direct_upload"`
 }
 
 // Defaults returns the built-in default settings, mirroring the values that
@@ -66,6 +69,7 @@ func Defaults() Settings {
 	return Settings{
 		MaxPasteSizeBytes: 10 * 1024 * 1024,  // 10 MB
 		MaxFileSizeBytes:  100 * 1024 * 1024, // 100 MB
+		UseDirectUpload:   false,
 		PasteExpiryOptions: []ExpiryOption{
 			{Label: "1 Jam", Minutes: 60},
 			{Label: "6 Jam", Minutes: 360},

@@ -747,12 +747,12 @@ function Dashboard({ token, onLogout }: { token: string; onLogout: () => void })
           )}
 
           {/* Top Performing Content Panel */}
-          <div className="grid gap-6 md:grid-cols-2">
+          <div className="grid gap-4 sm:gap-6 md:grid-cols-2">
             {/* Top Pastes Card */}
-            <div className="rounded-xl border border-gray-200 dark:border-dark-700 bg-white dark:bg-dark-800 p-5 shadow-lg">
+            <div className="rounded-xl border border-gray-200 dark:border-dark-700 bg-white dark:bg-dark-800 p-4 sm:p-5 shadow-lg">
               <h2 className="text-sm font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-4 flex items-center gap-2">
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4 text-accent">
-                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8" />
                   <circle cx="12" cy="12" r="3" />
                 </svg>
                 Top 5 Paste Terpopuler (Views)
@@ -762,10 +762,10 @@ function Dashboard({ token, onLogout }: { token: string; onLogout: () => void })
               ) : (
                 <div className="divide-y divide-gray-100 dark:divide-dark-700/60">
                   {topPastes.map((p, idx) => (
-                    <div key={p.slug} className="flex items-center justify-between py-3 gap-3">
+                    <div key={p.slug} className="flex items-center justify-between py-3 gap-3 min-w-0">
                       <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs font-bold text-gray-400 dark:text-gray-500 font-mono w-4">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="text-xs font-bold text-gray-400 dark:text-gray-500 font-mono w-4 shrink-0">
                             #{idx + 1}
                           </span>
                           <a
@@ -777,7 +777,7 @@ function Dashboard({ token, onLogout }: { token: string; onLogout: () => void })
                             {p.title.trim() || 'Untitled'}
                           </a>
                         </div>
-                        <div className="mt-1 flex items-center gap-2 text-xs text-gray-500 dark:text-gray-500 pl-6">
+                        <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-gray-500 dark:text-gray-400 pl-6">
                           <code>{p.slug}</code>
                           <span>•</span>
                           <span>{p.language}</span>
@@ -793,7 +793,7 @@ function Dashboard({ token, onLogout }: { token: string; onLogout: () => void })
             </div>
 
             {/* Top Files Card */}
-            <div className="rounded-xl border border-gray-200 dark:border-dark-700 bg-white dark:bg-dark-800 p-5 shadow-lg">
+            <div className="rounded-xl border border-gray-200 dark:border-dark-700 bg-white dark:bg-dark-800 p-4 sm:p-5 shadow-lg">
               <h2 className="text-sm font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-4 flex items-center gap-2">
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4 text-accent">
                   <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
@@ -807,10 +807,10 @@ function Dashboard({ token, onLogout }: { token: string; onLogout: () => void })
               ) : (
                 <div className="divide-y divide-gray-100 dark:divide-dark-700/60">
                   {topFiles.map((f, idx) => (
-                    <div key={f.slug} className="flex items-center justify-between py-3 gap-3">
+                    <div key={f.slug} className="flex items-center justify-between py-3 gap-3 min-w-0">
                       <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs font-bold text-gray-400 dark:text-gray-500 font-mono w-4">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="text-xs font-bold text-gray-400 dark:text-gray-500 font-mono w-4 shrink-0">
                             #{idx + 1}
                           </span>
                           <a
@@ -822,7 +822,7 @@ function Dashboard({ token, onLogout }: { token: string; onLogout: () => void })
                             {f.filename}
                           </a>
                         </div>
-                        <div className="mt-1 flex items-center gap-2 text-xs text-gray-500 dark:text-gray-500 pl-6">
+                        <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-gray-500 dark:text-gray-400 pl-6">
                           <code>{f.slug}</code>
                           <span>•</span>
                           <span>{formatFileSize(f.size_bytes)}</span>

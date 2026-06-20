@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -25,6 +26,11 @@ type FileService interface {
 	ListPublicRecent(ctx context.Context, limit int) ([]*paste.FileSummary, error)
 	PresignDownloadURL(ctx context.Context, slug string, inline bool) (string, error)
 	IncrementDownloads(ctx context.Context, slug string) error
+
+	// Direct S3 upload methods
+	SupportsUploadPresigning() bool
+	PresignUploadURL(ctx context.Context, filename, contentType string) (slug, storageKey, uploadURL string, err error)
+	RegisterUploadedFile(ctx context.Context, req paste.RegisterFileRequest) (*paste.FileRecord, error)
 }
 
 // FileHandler handles HTTP requests for file upload and retrieval.
@@ -63,6 +69,8 @@ const maxUploadMemory = 100 << 20
 func RegisterFileRoutes(r chi.Router, h *FileHandler) {
 	r.Get("/upload", h.ShowUploadForm)
 	r.Post("/upload", h.HandleUpload)
+	r.Post("/upload/presign", h.HandlePresignUpload)
+	r.Post("/upload/register", h.HandleRegisterUploadedFile)
 	r.Get("/f/{slug}", h.GetFile)
 	r.Head("/f/{slug}", h.GetFile)
 	r.Get("/f/{slug}/direct", h.DirectDownload)
@@ -73,15 +81,18 @@ func RegisterFileRoutes(r chi.Router, h *FileHandler) {
 func (h *FileHandler) ShowUploadForm(w http.ResponseWriter, r *http.Request) {
 	maxFileSize := int64(file.MaxFileSize)
 	disableFileUploads := false
+	useDirectUpload := false
 	if h.settings != nil {
 		maxFileSize = h.settings.Get().MaxFileSizeBytes
 		disableFileUploads = h.settings.Get().DisableFileUploads
+		useDirectUpload = h.settings.Get().UseDirectUpload
 	}
 	resp := map[string]interface{}{
 		"expiry_options":       h.fileExpiryOptions(),
 		"visibilities":         []string{"public", "unlisted", "password_protected"},
 		"max_file_size":        maxFileSize,
 		"disable_file_uploads": disableFileUploads,
+		"use_direct_upload":    useDirectUpload && h.fileService.SupportsUploadPresigning(),
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -485,6 +496,12 @@ func handleFileServiceError(w http.ResponseWriter, err error) {
 			Code:   "PASSWORD_REQUIRED",
 			Status: http.StatusBadRequest,
 		})
+	case errors.Is(err, file.ErrInvalidSlug):
+		writeJSON(w, http.StatusBadRequest, errorResponse{
+			Error:  err.Error(),
+			Code:   "INVALID_SLUG",
+			Status: http.StatusBadRequest,
+		})
 	default:
 		log.Printf("ERROR: unexpected internal server error: %v", err)
 		writeJSON(w, http.StatusInternalServerError, errorResponse{
@@ -518,4 +535,168 @@ func fileClientIP(r *http.Request) string {
 		return r.RemoteAddr
 	}
 	return host
+}
+
+type presignUploadRequest struct {
+	Filename   string `json:"filename"`
+	SizeBytes  int64  `json:"size_bytes"`
+	MIMEType   string `json:"mime_type"`
+	Visibility string `json:"visibility"`
+	Password   string `json:"password"`
+	ExpiresIn  string `json:"expires_in"`
+}
+
+// HandlePresignUpload generates a pre-signed PUT URL for uploading file to S3.
+func (h *FileHandler) HandlePresignUpload(w http.ResponseWriter, r *http.Request) {
+	// Enforce temporary disable setting
+	if h.settings != nil && h.settings.Get().DisableFileUploads {
+		writeJSON(w, http.StatusForbidden, errorResponse{
+			Error:  "Unggah file sedang dinonaktifkan sementara oleh administrator.",
+			Code:   "UPLOADS_DISABLED",
+			Status: http.StatusForbidden,
+		})
+		return
+	}
+
+	var req presignUploadRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse{
+			Error:  "Payload request tidak valid",
+			Code:   "BAD_REQUEST",
+			Status: http.StatusBadRequest,
+		})
+		return
+	}
+
+	// Enforce per-IP daily upload limit when configured.
+	if h.quota != nil && h.settings != nil {
+		limit := h.settings.Get().MaxFileUploadsPerDayPerIP
+		if limit > 0 {
+			key := "upload:" + fileClientIP(r)
+			if allowed, _ := h.quota.Allow(key, limit); !allowed {
+				writeJSON(w, http.StatusTooManyRequests, errorResponse{
+					Error:  "Batas unggah file harian tercapai. Coba lagi besok.",
+					Code:   "DAILY_LIMIT_REACHED",
+					Status: http.StatusTooManyRequests,
+				})
+				return
+			}
+		}
+	}
+
+	// Enforce daily size limits (global and per-IP) when configured.
+	if h.sizeQuota != nil && h.settings != nil {
+		set := h.settings.Get()
+		clientIP := fileClientIP(r)
+
+		// 1. Enforce global daily upload size limit
+		if set.MaxDailyUploadBytes > 0 {
+			allowed, _ := h.sizeQuota.Allow("global_size", req.SizeBytes, set.MaxDailyUploadBytes)
+			if !allowed {
+				writeJSON(w, http.StatusTooManyRequests, errorResponse{
+					Error:  "Batas total ukuran unggah berkas harian sistem telah tercapai.",
+					Code:   "GLOBAL_DAILY_SIZE_LIMIT_REACHED",
+					Status: http.StatusTooManyRequests,
+				})
+				return
+			}
+		}
+
+		// 2. Enforce per-IP daily upload size limit
+		if set.MaxDailyUploadBytesPerIP > 0 {
+			allowed, _ := h.sizeQuota.Allow("ip_size:"+clientIP, req.SizeBytes, set.MaxDailyUploadBytesPerIP)
+			if !allowed {
+				writeJSON(w, http.StatusTooManyRequests, errorResponse{
+					Error:  "Batas ukuran unggah berkas harian Anda telah tercapai. Coba lagi besok.",
+					Code:   "IP_DAILY_SIZE_LIMIT_REACHED",
+					Status: http.StatusTooManyRequests,
+				})
+				return
+			}
+		}
+	}
+
+	mimeType := req.MIMEType
+	if mimeType == "" {
+		mimeType = "application/octet-stream"
+	}
+
+	slug, storageKey, uploadURL, err := h.fileService.PresignUploadURL(r.Context(), req.Filename, mimeType)
+	if err != nil {
+		handleFileServiceError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"slug":        slug,
+		"storage_key": storageKey,
+		"upload_url":  uploadURL,
+	})
+}
+
+type registerUploadedFileRequest struct {
+	Slug       string `json:"slug"`
+	Filename   string `json:"filename"`
+	SizeBytes  int64  `json:"size_bytes"`
+	MIMEType   string `json:"mime_type"`
+	StorageKey string `json:"storage_key"`
+	Visibility string `json:"visibility"`
+	Password   string `json:"password"`
+	ExpiresIn  string `json:"expires_in"`
+}
+
+// HandleRegisterUploadedFile commits the file metadata to database after direct upload completes.
+func (h *FileHandler) HandleRegisterUploadedFile(w http.ResponseWriter, r *http.Request) {
+	// Enforce temporary disable setting
+	if h.settings != nil && h.settings.Get().DisableFileUploads {
+		writeJSON(w, http.StatusForbidden, errorResponse{
+			Error:  "Unggah file sedang dinonaktifkan sementara oleh administrator.",
+			Code:   "UPLOADS_DISABLED",
+			Status: http.StatusForbidden,
+		})
+		return
+	}
+
+	var req registerUploadedFileRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse{
+			Error:  "Payload request tidak valid",
+			Code:   "BAD_REQUEST",
+			Status: http.StatusBadRequest,
+		})
+		return
+	}
+
+	expiresIn, err := parseExpiryDuration(req.ExpiresIn)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse{
+			Error:  "Format durasi kadaluarsa tidak valid",
+			Code:   "INVALID_EXPIRY",
+			Status: http.StatusBadRequest,
+		})
+		return
+	}
+
+	regReq := paste.RegisterFileRequest{
+		Slug:       req.Slug,
+		Filename:   req.Filename,
+		MIMEType:   req.MIMEType,
+		Size:       req.SizeBytes,
+		StorageKey: req.StorageKey,
+		Visibility: paste.Visibility(req.Visibility),
+		Password:   req.Password,
+		ExpiresIn:  expiresIn,
+	}
+
+	record, err := h.fileService.RegisterUploadedFile(r.Context(), regReq)
+	if err != nil {
+		handleFileServiceError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, map[string]interface{}{
+		"success": true,
+		"slug":    record.Slug,
+		"url":     fmt.Sprintf("/f/%s", record.Slug),
+	})
 }

@@ -164,6 +164,54 @@ export async function uploadFile(data: FormData): Promise<UploadResponse> {
   });
 }
 
+export interface PresignUploadPayload {
+  filename: string;
+  size_bytes: number;
+  mime_type: string;
+  visibility: string;
+  password?: string;
+  expires_in?: string;
+}
+
+export interface PresignUploadResponse {
+  slug: string;
+  storage_key: string;
+  upload_url: string;
+}
+
+export interface RegisterUploadedFilePayload {
+  slug: string;
+  filename: string;
+  size_bytes: number;
+  mime_type: string;
+  storage_key: string;
+  visibility: string;
+  password?: string;
+  expires_in?: string;
+}
+
+/**
+ * POST /upload/presign — Request a pre-signed URL for direct S3 upload.
+ */
+export async function presignUpload(data: PresignUploadPayload): Promise<PresignUploadResponse> {
+  return apiFetch<PresignUploadResponse>('/upload/presign', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+}
+
+/**
+ * POST /upload/register — Register the uploaded file metadata in the DB.
+ */
+export async function registerUploadedFile(data: RegisterUploadedFilePayload): Promise<UploadResponse> {
+  return apiFetch<UploadResponse>('/upload/register', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+}
+
 /**
  * GET /f/{slug} — Fetch a file resource.
  *

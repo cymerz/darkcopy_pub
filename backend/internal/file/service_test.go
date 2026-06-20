@@ -86,6 +86,10 @@ func (m *mockFileStorage) Delete(ctx context.Context, storageKey string) error {
 	return m.deleteErr
 }
 
+func (m *mockFileStorage) Head(ctx context.Context, storageKey string) error {
+	return nil
+}
+
 func TestUpload_ValidPublicFile(t *testing.T) {
 	repo := &mockFileRepository{}
 	storage := &mockFileStorage{}
@@ -553,4 +557,78 @@ func (f *fakeResponseWriter) Write(data []byte) (int, error) {
 
 func (f *fakeResponseWriter) WriteHeader(statusCode int) {
 	f.statusCode = statusCode
+}
+
+func TestUpload_PathTraversalFilenameSanitization(t *testing.T) {
+	repo := &mockFileRepository{}
+	storage := &mockFileStorage{}
+	urlGen := &mockURLGenerator{slug: "abc12345"}
+	svc := NewService(repo, storage, urlGen)
+
+	content := []byte("secret")
+	req := paste.UploadFileRequest{
+		Filename:   "../../etc/passwd",
+		MIMEType:   "text/plain",
+		Size:       int64(len(content)),
+		Reader:     bytes.NewReader(content),
+		Visibility: paste.VisibilityPublic,
+		ExpiresIn:  1 * time.Hour,
+	}
+
+	record, err := svc.Upload(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Filename should be sanitized to passwd
+	if record.Filename != "passwd" {
+		t.Errorf("expected sanitized filename 'passwd', got %q", record.Filename)
+	}
+	if record.StorageKey != "uploads/abc12345/passwd" {
+		t.Errorf("expected storage key 'uploads/abc12345/passwd', got %q", record.StorageKey)
+	}
+}
+
+func TestRegisterUploadedFile_SecurityValidations(t *testing.T) {
+	repo := &mockFileRepository{}
+	storage := &mockFileStorage{}
+	urlGen := &mockURLGenerator{slug: "abc12345"}
+	svc := NewService(repo, storage, urlGen)
+
+	// 1. Test invalid slug containing traversal path characters
+	reqInvalidSlug := paste.RegisterFileRequest{
+		Slug:       "../invalid",
+		Filename:   "file.txt",
+		MIMEType:   "text/plain",
+		Size:       100,
+		Visibility: paste.VisibilityPublic,
+		ExpiresIn:  1 * time.Hour,
+	}
+	_, err := svc.RegisterUploadedFile(context.Background(), reqInvalidSlug)
+	if err != ErrInvalidSlug {
+		t.Errorf("expected ErrInvalidSlug, got %v", err)
+	}
+
+	// 2. Test filename sanitization and reconstruction of key
+	reqTraversalFilename := paste.RegisterFileRequest{
+		Slug:       "valid123",
+		Filename:   "../../Windows/win.ini",
+		MIMEType:   "text/plain",
+		Size:       100,
+		Visibility: paste.VisibilityPublic,
+		ExpiresIn:  1 * time.Hour,
+	}
+	// The storage Head method expects the reconstructed storage key "uploads/valid123/win.ini".
+	// Let's verify it gets created and registered correctly.
+	record, err := svc.RegisterUploadedFile(context.Background(), reqTraversalFilename)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if record.Filename != "win.ini" {
+		t.Errorf("expected sanitized filename 'win.ini', got %q", record.Filename)
+	}
+	if record.StorageKey != "uploads/valid123/win.ini" {
+		t.Errorf("expected reconstructed StorageKey 'uploads/valid123/win.ini', got %q", record.StorageKey)
+	}
 }

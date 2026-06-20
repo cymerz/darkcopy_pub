@@ -179,3 +179,43 @@ func (m *MultiS3Storage) PresignURL(ctx context.Context, storageKey string, expi
 
 	return "", fmt.Errorf("multi-s3 storage: file %s not found on any configured S3 providers for presigning", storageKey)
 }
+
+// Head checks if the file exists on any S3 provider (primary first, then fallback).
+func (m *MultiS3Storage) Head(ctx context.Context, storageKey string) error {
+	idx := m.GetProviderIndex(storageKey)
+	if idx < 0 {
+		return fmt.Errorf("multi-s3 storage: no S3 providers configured")
+	}
+
+	// Try the primary hashed provider first
+	if err := m.providers[idx].Head(ctx, storageKey); err == nil {
+		return nil
+	}
+
+	// If not found, check fallback providers
+	for i, provider := range m.providers {
+		if i == idx {
+			continue
+		}
+		if err := provider.Head(ctx, storageKey); err == nil {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("multi-s3 storage: file %s not found on any configured S3 providers", storageKey)
+}
+
+// PresignUploadURL generates a secure, temporary pre-signed PUT URL using the primary S3 provider.
+func (m *MultiS3Storage) PresignUploadURL(ctx context.Context, storageKey string, expires time.Duration, contentType string) (string, error) {
+	idx := m.GetProviderIndex(storageKey)
+	if idx < 0 {
+		return "", fmt.Errorf("multi-s3 storage: no S3 providers configured")
+	}
+
+	p, ok := m.providers[idx].(UploadPresigner)
+	if !ok {
+		return "", fmt.Errorf("multi-s3 storage: primary provider does not support presigned uploads")
+	}
+
+	return p.PresignUploadURL(ctx, storageKey, expires, contentType)
+}

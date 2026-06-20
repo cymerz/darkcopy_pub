@@ -25,12 +25,14 @@ import { useEffect, useRef, useState } from 'react';
 import { formatFileSize } from '@/lib/utils';
 import type { ExpiryOption, UploadResponse } from '@/lib/types';
 import { CopyButton } from '@/components/CopyButton';
+import { presignUpload, registerUploadedFile } from '@/lib/api';
 
 interface FileUploaderProps {
   expiryOptions: ExpiryOption[];
   visibilities: string[];
   maxFileSize?: number;
   disabled?: boolean;
+  useDirectUpload?: boolean;
 }
 
 type UploadStatus = 'idle' | 'uploading' | 'success' | 'error';
@@ -79,7 +81,7 @@ function FileTypeIcon() {
   );
 }
 
-export function FileUploader({ expiryOptions, visibilities, maxFileSize = 100 * 1024 * 1024, disabled }: FileUploaderProps) {
+export function FileUploader({ expiryOptions, visibilities, maxFileSize = 100 * 1024 * 1024, disabled, useDirectUpload }: FileUploaderProps) {
   const [file, setFile] = useState<File | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [expiresIn, setExpiresIn] = useState(
@@ -170,75 +172,139 @@ export function FileUploader({ expiryOptions, visibilities, maxFileSize = 100 * 
     setError(null);
     setUploadUrl('');
 
-    // Step 1: Build multipart form data with the exact backend field names.
-    const formData = new FormData();
-    formData.append('file', file);
-    formData.append('visibility', visibility);
-    formData.append('expires_in', expiresIn);
-    if (visibility === 'password_protected') {
-      formData.append('password', password);
-    }
+    if (useDirectUpload) {
+      // Direct-to-S3 pre-signed URL workflow
+      presignUpload({
+        filename: file.name,
+        size_bytes: file.size,
+        mime_type: file.type || 'application/octet-stream',
+        visibility: visibility,
+        password: visibility === 'password_protected' ? password : '',
+        expires_in: expiresIn,
+      })
+        .then((presignData) => {
+          const xhr = new XMLHttpRequest();
+          xhrRef.current = xhr;
 
-    // Step 2: Send with XMLHttpRequest for upload progress tracking (Req 5.7).
-    const xhr = new XMLHttpRequest();
-    xhrRef.current = xhr;
+          xhr.upload.onprogress = (e) => {
+            if (e.lengthComputable) {
+              setProgress(Math.round((e.loaded / e.total) * 100));
+            }
+          };
 
-    xhr.upload.onprogress = (e) => {
-      if (e.lengthComputable) {
-        setProgress(Math.round((e.loaded / e.total) * 100));
-      }
-    };
+          xhr.onload = () => {
+            xhrRef.current = null;
 
-    // Step 3: Handle the response.
-    xhr.onload = () => {
-      xhrRef.current = null;
+            if (xhr.status === 200 || xhr.status === 201 || xhr.status === 204) {
+              // Successfully uploaded to S3, register it with the backend database
+              registerUploadedFile({
+                slug: presignData.slug,
+                filename: file.name,
+                size_bytes: file.size,
+                mime_type: file.type || 'application/octet-stream',
+                storage_key: presignData.storage_key,
+                visibility: visibility,
+                password: visibility === 'password_protected' ? password : '',
+                expires_in: expiresIn,
+              })
+                .then((result) => {
+                  const origin = typeof window !== 'undefined' ? window.location.origin : '';
+                  const rawUrl = result.url ?? '';
+                  const fullUrl = /^https?:\/\//.test(rawUrl)
+                    ? rawUrl
+                    : `${origin}${rawUrl}`;
+                  setUploadUrl(fullUrl);
+                  setStatus('success');
+                })
+                .catch((err) => {
+                  setError(err.message || 'Gagal meregistrasi file.');
+                  setStatus('error');
+                });
+            } else {
+              setError('Gagal mengunggah file ke storage.');
+              setStatus('error');
+            }
+          };
 
-      if (xhr.status === 201) {
-        try {
-          const result: UploadResponse = JSON.parse(xhr.responseText);
-          const origin =
-            typeof window !== 'undefined' ? window.location.origin : '';
-          const rawUrl = result.url ?? '';
-          const fullUrl = /^https?:\/\//.test(rawUrl)
-            ? rawUrl
-            : `${origin}${rawUrl}`;
-          setUploadUrl(fullUrl);
-          setStatus('success');
-        } catch {
-          setError('Respons server tidak valid.');
+          xhr.onerror = () => {
+            xhrRef.current = null;
+            setError('Terjadi kesalahan jaringan saat mengunggah. Silakan coba lagi.');
+            setStatus('error');
+          };
+
+          xhr.open('PUT', presignData.upload_url);
+          xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
+          xhr.send(file);
+        })
+        .catch((err) => {
+          xhrRef.current = null;
+          setError(err.message || 'Gagal memproses pre-signed URL.');
           setStatus('error');
+        });
+    } else {
+      // Normal proxied multipart form data workflow
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('visibility', visibility);
+      formData.append('expires_in', expiresIn);
+      if (visibility === 'password_protected') {
+        formData.append('password', password);
+      }
+
+      const xhr = new XMLHttpRequest();
+      xhrRef.current = xhr;
+
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) {
+          setProgress(Math.round((e.loaded / e.total) * 100));
         }
-        return;
-      }
+      };
 
-      // HTTP 413 — file too large (Req 5.9).
-      if (xhr.status === 413) {
-        setError(`Ukuran file melebihi batas maksimum ${formatFileSize(maxFileSize)}`);
+      xhr.onload = () => {
+        xhrRef.current = null;
+
+        if (xhr.status === 201) {
+          try {
+            const result: UploadResponse = JSON.parse(xhr.responseText);
+            const origin = typeof window !== 'undefined' ? window.location.origin : '';
+            const rawUrl = result.url ?? '';
+            const fullUrl = /^https?:\/\//.test(rawUrl)
+              ? rawUrl
+              : `${origin}${rawUrl}`;
+            setUploadUrl(fullUrl);
+            setStatus('success');
+          } catch {
+            setError('Respons server tidak valid.');
+            setStatus('error');
+          }
+          return;
+        }
+
+        if (xhr.status === 413) {
+          setError(`Ukuran file melebihi batas maksimum ${formatFileSize(maxFileSize)}`);
+          setStatus('error');
+          return;
+        }
+
+        let message = 'Gagal mengunggah file. Silakan coba lagi.';
+        try {
+          const parsed = JSON.parse(xhr.responseText);
+          if (parsed?.error) message = parsed.error;
+        } catch {}
+        setError(message);
         setStatus('error');
-        return;
-      }
+      };
 
-      // Any other error — surface the backend message (Req 5.10).
-      let message = 'Gagal mengunggah file. Silakan coba lagi.';
-      try {
-        const parsed = JSON.parse(xhr.responseText);
-        if (parsed?.error) message = parsed.error;
-      } catch {
-        // Keep the default message when the body is not JSON.
-      }
-      setError(message);
-      setStatus('error');
-    };
+      xhr.onerror = () => {
+        xhrRef.current = null;
+        setError('Terjadi kesalahan jaringan saat mengunggah. Silakan coba lagi.');
+        setStatus('error');
+      };
 
-    xhr.onerror = () => {
-      xhrRef.current = null;
-      setError('Terjadi kesalahan jaringan saat mengunggah. Silakan coba lagi.');
-      setStatus('error');
-    };
-
-    xhr.open('POST', '/api/upload');
-    xhr.setRequestHeader('Accept', 'application/json');
-    xhr.send(formData);
+      xhr.open('POST', '/api/upload');
+      xhr.setRequestHeader('Accept', 'application/json');
+      xhr.send(formData);
+    }
   };
 
   const resetForAnother = () => {

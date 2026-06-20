@@ -303,7 +303,7 @@ export function AdminSettingsForm({
       </div>
 
       {/* Temporary Toggles */}
-      <div className="grid gap-4 sm:grid-cols-2 rounded-xl border border-gray-200 dark:border-dark-700 bg-white dark:bg-dark-800 p-4">
+      <div className="grid gap-4 sm:grid-cols-3 rounded-xl border border-gray-200 dark:border-dark-700 bg-white dark:bg-dark-800 p-4">
         <label className="flex items-center space-x-3 cursor-pointer">
           <input
             type="checkbox"
@@ -335,6 +335,23 @@ export function AdminSettingsForm({
             </span>
             <span className="block text-xs text-gray-500 dark:text-gray-500">
               Mencegah pengguna mengunggah berkas baru.
+            </span>
+          </div>
+        </label>
+        <label className="flex items-center space-x-3 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={settings.use_direct_upload ?? false}
+            onChange={(e) => patch({ use_direct_upload: e.target.checked })}
+            disabled={saving}
+            className="h-4 w-4 rounded border-gray-300 text-accent focus:ring-accent bg-transparent"
+          />
+          <div>
+            <span className="block text-sm font-medium text-gray-800 dark:text-gray-200">
+              Gunakan Direct-to-S3 Upload
+            </span>
+            <span className="block text-xs text-gray-500 dark:text-gray-500">
+              Unggah file langsung ke storage S3 via presigned URLs.
             </span>
           </div>
         </label>

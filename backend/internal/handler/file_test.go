@@ -69,6 +69,18 @@ func (m *mockFileService) IncrementDownloads(ctx context.Context, slug string) e
 	return nil
 }
 
+func (m *mockFileService) SupportsUploadPresigning() bool {
+	return false
+}
+
+func (m *mockFileService) PresignUploadURL(ctx context.Context, filename, contentType string) (slug, storageKey, uploadURL string, err error) {
+	return "", "", "", nil
+}
+
+func (m *mockFileService) RegisterUploadedFile(ctx context.Context, req paste.RegisterFileRequest) (*paste.FileRecord, error) {
+	return nil, nil
+}
+
 
 // mockAccessCtrl is a mock implementation of AccessController for testing.
 type mockAccessCtrl struct {
