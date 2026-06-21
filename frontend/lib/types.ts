@@ -106,6 +106,7 @@ export interface UploadOptions {
   visibilities: string[];
   max_file_size?: number;
   disable_file_uploads?: boolean;
+  use_direct_upload?: boolean;
 }
 
 /**
@@ -237,6 +238,7 @@ export interface AdminSettings {
   disable_file_uploads?: boolean;
   max_daily_upload_bytes?: number;
   max_daily_upload_bytes_per_ip?: number;
+  use_direct_upload?: boolean;
 }
 
 // ---------------------------------------------------------------------------

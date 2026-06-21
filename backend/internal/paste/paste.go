@@ -91,6 +91,18 @@ type UploadFileRequest struct {
 	ExpiresIn  time.Duration
 }
 
+// RegisterFileRequest contains the metadata needed to register a direct-uploaded file.
+type RegisterFileRequest struct {
+	Slug       string
+	Filename   string
+	MIMEType   string
+	Size       int64
+	StorageKey string
+	Visibility Visibility
+	Password   string
+	ExpiresIn  time.Duration
+}
+
 // ExpiryOption represents a selectable expiry duration.
 type ExpiryOption struct {
 	Label    string

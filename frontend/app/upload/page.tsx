@@ -42,6 +42,7 @@ export default async function UploadPage() {
         visibilities={data.visibilities}
         maxFileSize={data.max_file_size}
         disabled={data.disable_file_uploads ?? false}
+        useDirectUpload={data.use_direct_upload ?? false}
       />
     </section>
   );

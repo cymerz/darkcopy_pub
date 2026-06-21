@@ -40,6 +40,12 @@ type ExpiredItemStore interface {
 	DeleteFile(ctx context.Context, id uuid.UUID) error
 }
 
+// Locker defines the interface for distributed locks.
+type Locker interface {
+	AcquireLock(ctx context.Context, key string, ttl time.Duration) (bool, error)
+	ReleaseLock(ctx context.Context, key string) error
+}
+
 // FileDeleter defines the interface for deleting files from storage.
 type FileDeleter interface {
 	Delete(ctx context.Context, storageKey string) error
@@ -49,6 +55,7 @@ type FileDeleter interface {
 type Manager struct {
 	store       ExpiredItemStore
 	fileDeleter FileDeleter
+	locker      Locker
 	logger      *slog.Logger
 	now         func() time.Time
 	interval    time.Duration

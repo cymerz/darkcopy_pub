@@ -15,4 +15,9 @@ type FileService interface {
 	ValidatePassword(ctx context.Context, slug, password string) (bool, error)
 	ServeFile(ctx context.Context, slug string, w http.ResponseWriter) error
 	PresignDownloadURL(ctx context.Context, slug string, inline bool) (string, error)
+
+	// Direct S3 upload methods
+	SupportsUploadPresigning() bool
+	PresignUploadURL(ctx context.Context, filename, contentType string) (slug, storageKey, uploadURL string, err error)
+	RegisterUploadedFile(ctx context.Context, req paste.RegisterFileRequest) (*paste.FileRecord, error)
 }

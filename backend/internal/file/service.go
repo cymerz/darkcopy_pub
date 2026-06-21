@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -39,7 +40,26 @@ var (
 	ErrPasswordRequired = errors.New("Kata sandi wajib diisi untuk visibilitas ini")
 	ErrNotFound         = errors.New("file tidak ditemukan")
 	ErrExpired          = errors.New("File ini telah kadaluarsa")
+	ErrInvalidSlug      = errors.New("Format slug tidak valid")
 )
+
+// dangerousMIMETypes contains MIME types that must never be served inline
+// because browsers will execute scripts/markup contained within them.
+var dangerousMIMETypes = map[string]bool{
+	"text/html":                true,
+	"application/xhtml+xml":    true,
+	"application/javascript":   true,
+	"text/javascript":          true,
+	"image/svg+xml":            true,
+	"application/xml":          true,
+	"text/xml":                 true,
+}
+
+// IsDangerousMIME returns true if the given (lowercased) MIME type should
+// never be served inline to prevent stored XSS attacks.
+func IsDangerousMIME(mime string) bool {
+	return dangerousMIMETypes[mime]
+}
 
 // FileRepository defines the interface for file persistence operations.
 type FileRepository interface {
@@ -55,6 +75,12 @@ type FileStorage interface {
 	Save(ctx context.Context, storageKey string, reader io.Reader) error
 	Open(ctx context.Context, storageKey string) (io.ReadCloser, error)
 	Delete(ctx context.Context, storageKey string) error
+	Head(ctx context.Context, storageKey string) error
+}
+
+// UploadPresigner defines the interface for generating presigned upload URLs.
+type UploadPresigner interface {
+	PresignUploadURL(ctx context.Context, storageKey string, expires time.Duration, contentType string) (string, error)
 }
 
 // Service is the concrete implementation of FileService.
@@ -125,8 +151,11 @@ func (s *Service) Upload(ctx context.Context, req paste.UploadFileRequest) (*pas
 		return nil, err
 	}
 
+	// Sanitize filename to prevent path traversal
+	filename := sanitizeFilename(req.Filename)
+
 	// Build storage key: uploads/{slug}/{filename}
-	storageKey := fmt.Sprintf("uploads/%s/%s", slug, req.Filename)
+	storageKey := fmt.Sprintf("uploads/%s/%s", slug, filename)
 
 	// Save file to disk.
 	if err := s.storage.Save(ctx, storageKey, req.Reader); err != nil {
@@ -151,7 +180,7 @@ func (s *Service) Upload(ctx context.Context, req paste.UploadFileRequest) (*pas
 	record := &paste.FileRecord{
 		ID:           uuid.New(),
 		Slug:         slug,
-		Filename:     req.Filename,
+		Filename:     filename,
 		MIMEType:     req.MIMEType,
 		SizeBytes:    req.Size,
 		StorageKey:   storageKey,
@@ -203,6 +232,13 @@ func (s *Service) ServeFile(ctx context.Context, slug string, w http.ResponseWri
 		}
 	}
 
+	// SECURITY (VULN-03): Force attachment for dangerous MIME types to prevent stored XSS.
+	// Browsers will execute HTML/SVG/JS if served inline, so we block that regardless of user preference.
+	mimeNormalized := strings.ToLower(strings.TrimSpace(record.MIMEType))
+	if dangerousMIMETypes[mimeNormalized] {
+		inline = false
+	}
+
 	disposition := "attachment"
 	if inline {
 		disposition = "inline"
@@ -220,8 +256,12 @@ func (s *Service) ServeFile(ctx context.Context, slug string, w http.ResponseWri
 	_ = s.repo.IncrementDownloads(ctx, slug)
 	record.Downloads++
 
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`%s; filename="%s"`, disposition, record.Filename))
+	// SECURITY (VULN-01): Sanitize filename for Content-Disposition header to prevent
+	// HTTP response splitting via double-quote or CRLF injection.
+	safeName := sanitizeHeaderValue(record.Filename)
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`%s; filename="%s"`, disposition, safeName))
 	w.Header().Set("Content-Type", record.MIMEType)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("X-Downloads-Count", strconv.Itoa(record.Downloads))
 
 	// Enable seeking in browser video players by announcing byte-range support.
@@ -337,5 +377,145 @@ func (s *Service) ValidatePassword(ctx context.Context, slug, password string) (
 // IncrementDownloads increments the download count of a file by its slug.
 func (s *Service) IncrementDownloads(ctx context.Context, slug string) error {
 	return s.repo.IncrementDownloads(ctx, slug)
+}
+
+// SupportsUploadPresigning returns true if the underlying storage supports upload presigning.
+func (s *Service) SupportsUploadPresigning() bool {
+	_, ok := s.storage.(UploadPresigner)
+	return ok
+}
+
+// PresignUploadURL generates a unique slug, constructs a storage key, and returns
+// a pre-signed S3 upload URL for PUT request.
+func (s *Service) PresignUploadURL(ctx context.Context, filename, contentType string) (slug, storageKey, uploadURL string, err error) {
+	presigner, ok := s.storage.(UploadPresigner)
+	if !ok {
+		return "", "", "", ErrPresignUnsupported
+	}
+
+	// Sanitize filename to prevent path traversal
+	sanitizedFilename := sanitizeFilename(filename)
+
+	slug, err = s.urlGen.GenerateSlug(ctx)
+	if err != nil {
+		return "", "", "", err
+	}
+
+	storageKey = fmt.Sprintf("uploads/%s/%s", slug, sanitizedFilename)
+	uploadURL, err = presigner.PresignUploadURL(ctx, storageKey, DefaultPresignExpiry, contentType)
+	if err != nil {
+		return "", "", "", err
+	}
+
+	return slug, storageKey, uploadURL, nil
+}
+
+// RegisterUploadedFile verifies the uploaded file exists in storage and records its metadata in PostgreSQL.
+func (s *Service) RegisterUploadedFile(ctx context.Context, req paste.RegisterFileRequest) (*paste.FileRecord, error) {
+	// Validate slug format to prevent directory traversal or access bypass.
+	// Slugs should be alphanumeric only.
+	for _, r := range req.Slug {
+		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')) {
+			return nil, ErrInvalidSlug
+		}
+	}
+
+	// Sanitize filename to prevent directory traversal
+	filename := sanitizeFilename(req.Filename)
+
+	// Reconstruct expected StorageKey strictly on backend using Slug and Sanitized Filename
+	// to prevent clients from registering arbitrary keys or accessing other users' files.
+	expectedStorageKey := fmt.Sprintf("uploads/%s/%s", req.Slug, filename)
+
+	// 1. Verify file exists in storage.
+	if err := s.storage.Head(ctx, expectedStorageKey); err != nil {
+		return nil, fmt.Errorf("file tidak ditemukan di storage: %w", err)
+	}
+
+	// 2. Validate password is required for password_protected visibility.
+	if req.Visibility == paste.VisibilityPasswordProtected {
+		if strings.TrimSpace(req.Password) == "" {
+			return nil, ErrPasswordRequired
+		}
+	}
+
+	// 3. Hash password using bcrypt.
+	var passwordHash string
+	if req.Visibility == paste.VisibilityPasswordProtected {
+		hash, err := access.HashPassword(req.Password)
+		if err != nil {
+			return nil, err
+		}
+		passwordHash = hash
+	}
+
+	now := s.now()
+
+	// 4. Default ExpiresIn to 24 hours if not set (zero value).
+	expiresIn := req.ExpiresIn
+	if expiresIn == 0 {
+		expiresIn = DefaultExpiryDuration
+	}
+
+	// Calculate expires_at. NULL (nil) if ExpiresIn is negative (NeverExpires sentinel).
+	var expiresAt *time.Time
+	if expiresIn > 0 {
+		t := now.Add(expiresIn)
+		expiresAt = &t
+	}
+
+	record := &paste.FileRecord{
+		ID:           uuid.New(),
+		Slug:         req.Slug,
+		Filename:     filename,
+		MIMEType:     req.MIMEType,
+		SizeBytes:    req.Size,
+		StorageKey:   expectedStorageKey,
+		Visibility:   req.Visibility,
+		PasswordHash: passwordHash,
+		ExpiresAt:    expiresAt,
+		CreatedAt:    now,
+	}
+
+	if err := s.repo.InsertFile(ctx, record); err != nil {
+		return nil, err
+	}
+
+	return record, nil
+}
+
+// sanitizeFilename strips directory components and traversal sequences from a filename.
+func sanitizeFilename(filename string) string {
+	// Convert backslashes to forward slashes
+	filename = strings.ReplaceAll(filename, "\\", "/")
+	
+	// Remove all ".." to prevent any directory traversal
+	for strings.Contains(filename, "..") {
+		filename = strings.ReplaceAll(filename, "..", "")
+	}
+
+	// Get the base name using path package (which understands forward slashes)
+	filename = path.Base(filename)
+
+	// Remove remaining slashes to be absolutely safe
+	filename = strings.ReplaceAll(filename, "/", "")
+	filename = strings.ReplaceAll(filename, "\\", "")
+
+	if filename == "" || filename == "." || filename == ".." {
+		filename = "uploaded_file"
+	}
+	return filename
+}
+
+// sanitizeHeaderValue removes characters that could enable HTTP response splitting
+// or break out of a quoted header parameter (CRLF injection, double-quote escape).
+func sanitizeHeaderValue(s string) string {
+	r := strings.NewReplacer(
+		`"`, `'`,  // Replace double quotes with single quotes
+		"\r", "",  // Strip carriage return
+		"\n", "",  // Strip newline
+		"\x00", "", // Strip null bytes
+	)
+	return r.Replace(s)
 }
 

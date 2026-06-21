@@ -32,7 +32,7 @@ func TestHashPassword(t *testing.T) {
 }
 
 func TestCheckAccess_EmptyHash(t *testing.T) {
-	ctrl := NewController()
+	ctrl := NewController(nil)
 	ctx := context.Background()
 
 	result, err := ctrl.CheckAccess(ctx, "", "anypassword")
@@ -45,7 +45,7 @@ func TestCheckAccess_EmptyHash(t *testing.T) {
 }
 
 func TestCheckAccess_CorrectPassword(t *testing.T) {
-	ctrl := NewController()
+	ctrl := NewController(nil)
 	ctx := context.Background()
 
 	password := "correctpassword"
@@ -61,7 +61,7 @@ func TestCheckAccess_CorrectPassword(t *testing.T) {
 }
 
 func TestCheckAccess_WrongPassword(t *testing.T) {
-	ctrl := NewController()
+	ctrl := NewController(nil)
 	ctx := context.Background()
 
 	password := "correctpassword"
@@ -77,7 +77,7 @@ func TestCheckAccess_WrongPassword(t *testing.T) {
 }
 
 func TestRecordFailedAttempt_IncreasesCount(t *testing.T) {
-	ctrl := NewController()
+	ctrl := NewController(nil)
 	ctx := context.Background()
 
 	ip := "192.168.1.1"
@@ -99,7 +99,7 @@ func TestRecordFailedAttempt_IncreasesCount(t *testing.T) {
 }
 
 func TestIsRateLimited_AfterThreshold(t *testing.T) {
-	ctrl := NewController()
+	ctrl := NewController(nil)
 	ctx := context.Background()
 
 	ip := "192.168.1.1"
@@ -122,7 +122,7 @@ func TestIsRateLimited_AfterThreshold(t *testing.T) {
 }
 
 func TestIsRateLimited_DifferentIPsAreIndependent(t *testing.T) {
-	ctrl := NewController()
+	ctrl := NewController(nil)
 	ctx := context.Background()
 
 	resource := "abc12345"
@@ -143,7 +143,7 @@ func TestIsRateLimited_DifferentIPsAreIndependent(t *testing.T) {
 }
 
 func TestIsRateLimited_DifferentResourcesAreIndependent(t *testing.T) {
-	ctrl := NewController()
+	ctrl := NewController(nil)
 	ctx := context.Background()
 
 	ip := "192.168.1.1"
@@ -164,7 +164,7 @@ func TestIsRateLimited_DifferentResourcesAreIndependent(t *testing.T) {
 }
 
 func TestIsRateLimited_ExpiresAfterTTL(t *testing.T) {
-	ctrl := NewController()
+	ctrl := NewController(nil)
 	ctx := context.Background()
 
 	ip := "192.168.1.1"
@@ -198,7 +198,7 @@ func TestIsRateLimited_ExpiresAfterTTL(t *testing.T) {
 }
 
 func TestRecordFailedAttempt_ResetsAfterTTL(t *testing.T) {
-	ctrl := NewController()
+	ctrl := NewController(nil)
 	ctx := context.Background()
 
 	ip := "192.168.1.1"
@@ -229,7 +229,7 @@ func TestRecordFailedAttempt_ResetsAfterTTL(t *testing.T) {
 }
 
 func TestResetRateLimit(t *testing.T) {
-	ctrl := NewController()
+	ctrl := NewController(nil)
 	ctx := context.Background()
 
 	ip := "192.168.1.1"
@@ -260,7 +260,7 @@ func TestResetRateLimit(t *testing.T) {
 }
 
 func TestIsRateLimited_NoEntry(t *testing.T) {
-	ctrl := NewController()
+	ctrl := NewController(nil)
 	ctx := context.Background()
 
 	limited, err := ctrl.IsRateLimited(ctx, "1.2.3.4", "nonexistent")

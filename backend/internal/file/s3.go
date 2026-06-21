@@ -240,3 +240,18 @@ func (s *S3Storage) PresignURL(ctx context.Context, storageKey string, expires t
 
 	return rawURL, nil
 }
+
+// PresignUploadURL generates a secure, temporary pre-signed URL to upload an object using PUT.
+func (s *S3Storage) PresignUploadURL(ctx context.Context, storageKey string, expires time.Duration, contentType string) (string, error) {
+	presignClient := s3.NewPresignClient(s.client)
+	input := &s3.PutObjectInput{
+		Bucket:      aws.String(s.bucket),
+		Key:         aws.String(storageKey),
+		ContentType: aws.String(contentType),
+	}
+	presignedReq, err := presignClient.PresignPutObject(ctx, input, s3.WithPresignExpires(expires))
+	if err != nil {
+		return "", fmt.Errorf("s3 storage: failed to presign put object %s: %w", storageKey, err)
+	}
+	return presignedReq.URL, nil
+}

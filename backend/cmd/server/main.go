@@ -14,6 +14,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/redis/go-redis/v9"
 	"github.com/gthbn/pastebin/internal/access"
 	"github.com/gthbn/pastebin/internal/admin"
 	"github.com/gthbn/pastebin/internal/db"
@@ -65,6 +66,7 @@ func main() {
 	port := envOrDefault("PORT", "8080")
 	uploadDir := envOrDefault("UPLOAD_DIR", "./uploads")
 	adminToken := os.Getenv("ADMIN_TOKEN")
+	redisURL := os.Getenv("REDIS_URL")
 
 	// Cleanup interval for the expiry sweep (Go duration, e.g. "5m", "1h").
 	// Defaults to the manager's built-in interval when unset or invalid.
@@ -95,10 +97,36 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Initialize Redis client if configured.
+	var rdb *redis.Client
+	if redisURL != "" {
+		opt, err := redis.ParseURL(redisURL)
+		if err != nil {
+			logger.Error("invalid REDIS_URL", "error", err)
+			os.Exit(1)
+		}
+		rdb = redis.NewClient(opt)
+
+		// Verify connection
+		pingCtx, pingCancel := context.WithTimeout(ctx, 3*time.Second)
+		if err := rdb.Ping(pingCtx).Err(); err != nil {
+			logger.Error("failed to connect to Redis, disabling Redis integration", "error", err)
+			rdb = nil
+		} else {
+			logger.Info("connected to Redis successfully")
+		}
+		pingCancel()
+	}
+
 	// Initialize repositories.
 	pasteRepo := db.NewPasteRepo(pool)
 	fileRepo := db.NewFileRepo(pool)
 	expiryStore := db.NewExpiryStore(pool)
+	if rdb != nil {
+		pasteRepo = pasteRepo.WithRedis(rdb)
+		fileRepo = fileRepo.WithRedis(rdb)
+		expiryStore = expiryStore.WithRedis(rdb)
+	}
 	settingsRepo := db.NewSettingsRepo(pool)
 	reportRepo := db.NewReportRepo(pool)
 
@@ -117,12 +145,20 @@ func main() {
 	settingsProvider := settings.NewProvider(currentSettings)
 	settingsMgr := settings.NewManager(settingsProvider, settingsRepo)
 
-	// Per-IP daily quota counter (in-memory, resets at UTC midnight / on restart).
-	dailyQuota := quota.NewCounter()
-	dailySizeQuota := quota.NewSizeCounter()
+	// Initialize Quota Counter.
+	var dailyQuota handler.DailyQuota = quota.NewCounter()
+	var dailySizeQuota handler.DailySizeQuota = quota.NewSizeCounter()
+	if rdb != nil {
+		dailyQuota = quota.NewRedisCounter(rdb)
+		dailySizeQuota = quota.NewRedisSizeCounter(rdb)
+	}
 
 	// Initialize services.
-	accessCtl := access.NewController()
+	var rateLimitStore access.RateLimitStore
+	if rdb != nil {
+		rateLimitStore = access.NewRedisRateLimitStore(rdb)
+	}
+	accessCtl := access.NewController(rateLimitStore)
 	highlighter := highlight.NewChromaHighlighter("")
 
 	// Create a SlugExistsFunc that queries both pastes and files tables.
@@ -217,8 +253,26 @@ func main() {
 	fileSvc := file.NewService(fileRepo, fileStorage, urlGen)
 	fileSvc.SetMaxFileSizeFunc(settingsProvider.MaxFileSize)
 
+	// Initialize distributed locker for expiry manager if Redis is active.
+	var locker expiry.Locker
+	if rdb != nil {
+		locker = expiry.NewRedisLocker(rdb)
+	}
+
 	// Initialize expiry manager.
-	expiryMgr := expiry.NewManager(expiryStore, fileStorage, expiry.WithLogger(logger), expiry.WithInterval(cleanupInterval))
+	expiryMgr := expiry.NewManager(
+		expiryStore,
+		fileStorage,
+		expiry.WithLogger(logger),
+		expiry.WithInterval(cleanupInterval),
+		expiry.WithLocker(locker),
+	)
+
+	if rdb != nil {
+		// Flush views/downloads from Redis to PostgreSQL every 10 seconds
+		db.StartFlusher(ctx, rdb, pool, 10*time.Second, logger)
+		logger.Info("started views/downloads flusher background task")
+	}
 
 	// The admin service can trigger an on-demand purge via the expiry manager.
 	adminSvc := admin.NewService(pasteRepo, fileRepo, fileStorage, expiryMgr)
@@ -312,35 +366,111 @@ func envOrBool(key string) bool {
 	return v == "true" || v == "1" || v == "yes" || v == "on"
 }
 
-// RealIPMiddleware is a custom, highly robust middleware to resolve the real
-// client IP address when behind multiple proxies (Cloudflare -> aaPanel OpenResty -> Next.js Proxy -> Go).
+// RealIPMiddleware resolves the real client IP address from forwarded headers,
+// but ONLY when the direct connection originates from a trusted proxy.
+//
+// SECURITY (VULN-04): Without this check, any client connecting directly to the
+// Go server could forge CF-Connecting-IP / X-Forwarded-For headers to bypass
+// rate limiting and daily upload quotas.
+//
+// Trusted proxies are configured via the TRUSTED_PROXIES env var (comma-separated
+// CIDRs or IPs). When empty, private/loopback networks are trusted by default
+// (safe for typical reverse-proxy deployments).
 func RealIPMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		clientIP := ""
+	trustedNets := parseTrustedProxies(os.Getenv("TRUSTED_PROXIES"))
 
-		// 1. Check Cloudflare-specific header
-		if cfip := r.Header.Get("CF-Connecting-IP"); cfip != "" {
-			clientIP = cfip
-		} else if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-			// 2. Check X-Forwarded-For header and get the very first client IP
-			ips := strings.Split(xff, ",")
-			if firstIP := strings.TrimSpace(ips[0]); firstIP != "" {
-				clientIP = firstIP
-			}
-		} else if xri := r.Header.Get("X-Real-IP"); xri != "" {
-			// 3. Check X-Real-IP fallback
-			clientIP = xri
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Extract the direct connection IP (the proxy's IP, not the client's).
+		directIP, _, _ := net.SplitHostPort(r.RemoteAddr)
+		if directIP == "" {
+			directIP = r.RemoteAddr
 		}
 
-		// If a real client IP was successfully extracted, override r.RemoteAddr
-		if clientIP != "" {
-			if _, port, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-				r.RemoteAddr = net.JoinHostPort(clientIP, port)
-			} else {
-				r.RemoteAddr = clientIP
+		// Only trust forwarded headers if the direct connection is from a trusted proxy.
+		if isTrustedProxy(directIP, trustedNets) {
+			clientIP := ""
+
+			// 1. Check Cloudflare-specific header
+			if cfip := r.Header.Get("CF-Connecting-IP"); cfip != "" {
+				clientIP = cfip
+			} else if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+				// 2. Check X-Forwarded-For header and get the very first client IP
+				ips := strings.Split(xff, ",")
+				if firstIP := strings.TrimSpace(ips[0]); firstIP != "" {
+					clientIP = firstIP
+				}
+			} else if xri := r.Header.Get("X-Real-IP"); xri != "" {
+				// 3. Check X-Real-IP fallback
+				clientIP = xri
+			}
+
+			// If a real client IP was successfully extracted, override r.RemoteAddr
+			if clientIP != "" {
+				if _, port, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+					r.RemoteAddr = net.JoinHostPort(clientIP, port)
+				} else {
+					r.RemoteAddr = clientIP
+				}
 			}
 		}
 
 		next.ServeHTTP(w, r)
 	})
 }
+
+// parseTrustedProxies parses a comma-separated list of CIDRs and IPs into
+// a slice of *net.IPNet. When the input is empty, it returns the default
+// private/loopback networks (safe for typical reverse-proxy deployments).
+func parseTrustedProxies(raw string) []*net.IPNet {
+	// Default: trust private networks and loopback (RFC1918, RFC4193, localhost).
+	defaults := []string{
+		"127.0.0.0/8",    // IPv4 loopback
+		"10.0.0.0/8",     // RFC1918 Class A
+		"172.16.0.0/12",  // RFC1918 Class B
+		"192.168.0.0/16", // RFC1918 Class C
+		"::1/128",        // IPv6 loopback
+		"fc00::/7",       // IPv6 unique local
+	}
+
+	sources := defaults
+	if raw != "" {
+		sources = strings.Split(raw, ",")
+	}
+
+	var nets []*net.IPNet
+	for _, s := range sources {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		// If it's a bare IP (no /mask), add a host mask.
+		if !strings.Contains(s, "/") {
+			if strings.Contains(s, ":") {
+				s += "/128"
+			} else {
+				s += "/32"
+			}
+		}
+		_, cidr, err := net.ParseCIDR(s)
+		if err == nil {
+			nets = append(nets, cidr)
+		}
+	}
+	return nets
+}
+
+// isTrustedProxy checks whether the given IP address falls within any of
+// the trusted proxy networks.
+func isTrustedProxy(ip string, trusted []*net.IPNet) bool {
+	parsed := net.ParseIP(ip)
+	if parsed == nil {
+		return false
+	}
+	for _, n := range trusted {
+		if n.Contains(parsed) {
+			return true
+		}
+	}
+	return false
+}
+

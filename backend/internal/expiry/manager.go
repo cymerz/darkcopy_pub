@@ -4,6 +4,8 @@ import (
 	"context"
 	"log/slog"
 	"time"
+
+	"github.com/redis/go-redis/v9"
 )
 
 // DefaultInterval is the default cleanup interval (5 minutes).
@@ -43,6 +45,13 @@ func WithLogger(logger *slog.Logger) Option {
 	}
 }
 
+// WithLocker sets the distributed locker for the Manager.
+func WithLocker(locker Locker) Option {
+	return func(m *Manager) {
+		m.locker = locker
+	}
+}
+
 // NewManager creates a new Manager with the given dependencies and options.
 func NewManager(store ExpiredItemStore, fileDeleter FileDeleter, opts ...Option) *Manager {
 	m := &Manager{
@@ -55,6 +64,9 @@ func NewManager(store ExpiredItemStore, fileDeleter FileDeleter, opts ...Option)
 	}
 	for _, opt := range opts {
 		opt(m)
+	}
+	if m.locker == nil {
+		m.locker = &LocalLocker{}
 	}
 	return m
 }
@@ -83,12 +95,63 @@ func (m *Manager) Start(ctx context.Context) {
 
 // runOnce executes a single cleanup cycle and logs the outcome.
 func (m *Manager) runOnce(ctx context.Context) {
+	// Attempt to acquire distributed lock for cleanup (e.g. 2 min TTL to avoid concurrency)
+	lockAcquired, err := m.locker.AcquireLock(ctx, "expiry_cleanup", 2*time.Minute)
+	if err != nil {
+		m.logger.Error("failed to acquire cleanup lock", "error", err)
+		return
+	}
+	if !lockAcquired {
+		// Cleanup is currently running on another instance
+		return
+	}
+	defer func() {
+		if err := m.locker.ReleaseLock(ctx, "expiry_cleanup"); err != nil {
+			m.logger.Warn("failed to release cleanup lock", "error", err)
+		}
+	}()
+
 	deleted, err := m.RunCleanup(ctx)
 	if err != nil {
 		m.logger.Error("cleanup cycle failed", "error", err)
 	} else if deleted > 0 {
 		m.logger.Info("cleanup cycle completed", "deleted", deleted)
 	}
+}
+
+// LocalLocker is a no-op distributed locker for single-instance setups.
+type LocalLocker struct{}
+
+// AcquireLock always returns true.
+func (l *LocalLocker) AcquireLock(ctx context.Context, key string, ttl time.Duration) (bool, error) {
+	return true, nil
+}
+
+// ReleaseLock always returns nil.
+func (l *LocalLocker) ReleaseLock(ctx context.Context, key string) error {
+	return nil
+}
+
+// RedisLocker is a Redis-backed distributed locker.
+type RedisLocker struct {
+	rdb redis.Cmdable
+}
+
+// NewRedisLocker creates a new RedisLocker.
+func NewRedisLocker(rdb redis.Cmdable) *RedisLocker {
+	return &RedisLocker{rdb: rdb}
+}
+
+// AcquireLock attempts to set a key with TTL using SETNX.
+func (r *RedisLocker) AcquireLock(ctx context.Context, key string, ttl time.Duration) (bool, error) {
+	rkey := "lock:" + key
+	return r.rdb.SetNX(ctx, rkey, "1", ttl).Result()
+}
+
+// ReleaseLock deletes the lock key from Redis.
+func (r *RedisLocker) ReleaseLock(ctx context.Context, key string) error {
+	rkey := "lock:" + key
+	return r.rdb.Del(ctx, rkey).Err()
 }
 
 // RunCleanup queries expired pastes and files and deletes them.
